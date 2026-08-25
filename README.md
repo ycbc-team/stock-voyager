@@ -61,15 +61,25 @@
 
 | 文件 | 作用 |
 |------|------|
-| `ashare_close_fetcher.py` | **抓取脚本**（零第三方依赖，仅标准库）。覆盖主要指数、申万一级 31 行业涨跌幅+主力净流入、北向资金（仅成交额+占比，净买入不编造）、风格指数、个股资金流 TOP 与热点异动。主源东方财富 push2（与数据宝同源），指数回退腾讯 gtimg；输出 JSON/Markdown/CSV，均显式标注数据日期与来源。 |
-| `ashare_close_<date>.json` / `.md` | 某交易日运行产出的样例快照（默认落在 `fundflow/` 内，与脚本同目录）。 |
+| `ashare_close_fetcher.py` | **抓取 + 出报告脚本**（零第三方依赖，仅标准库）。覆盖主要指数、申万一级 31 行业涨跌幅+主力净流入、北向资金（仅成交额+占比，净买入不编造）、风格指数、个股资金流 TOP 与热点异动。主源东方财富 push2（与数据宝同源），指数回退腾讯 gtimg。 |
+| `report.css` | 网页报告样式源（深色金融终端风、涨红跌绿），生成 HTML 时**内联**进产物，保证 HTML 单文件自包含。 |
 
-运行（在本机 Mac 跑可完整取数；沙箱出口代理会拦截东方财富板块类接口）：
+**输出**（默认写入项目根 `build/`，已 gitignore；文件名固定无日期，每天运行覆盖前一天）：
+
+| 产物 | 说明 |
+|------|------|
+| `build/ashare_close.html` | **默认输出**。纯静态网页报告（数据内联、零 JS），移动端 Safari 可直接打开；打开/刷新即见最新。 |
+| `build/ashare_close.json` / `.md` / `_industry.csv` | 可选输出，由 `--fmt` 控制。 |
+
+**日常用法**：每天跑一次 py 更新数据，打开 `build/ashare_close.html` 即见最新报告。
 
 ```bash
 cd fundflow
-python3 ashare_close_fetcher.py --date 2026-08-25
-# 省略 --date 自动取最近交易日；--json/--md/--csv 可指定输出路径
-# 偶发超时调优：EM_TIMEOUT=8 EM_RETRIES=2 python3 ashare_close_fetcher.py
+python3 ashare_close_fetcher.py                            # 默认仅输出 HTML
+python3 ashare_close_fetcher.py --fmt json,md,html         # 同时输出 JSON + Markdown + HTML
+python3 ashare_close_fetcher.py --fmt csv --out /tmp/x     # 仅申万行业 CSV，自定义目录
+# 省略 --date 自动取最近交易日；偶发超时调优：EM_TIMEOUT=8 EM_RETRIES=2 python3 ashare_close_fetcher.py
 ```
+
+> 注：在 WorkBuddy 沙箱内东方财富板块类接口会被出口代理拦截，只有指数走腾讯回退、其余模块显示「数据暂缺」；在本机 Mac 直接运行即可完整取数并生成全量报告。
 
