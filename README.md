@@ -54,3 +54,22 @@
 - 配色、卡片网格、弹窗宽度等 CSS。
 
 常规换市场**不必动 `build.py`**，只改 `data.json`。
+
+## `fundflow/` —— A股收盘资金流抓取模块
+
+独立追踪 A 股每日收盘后的资金流动数据（与上面的页面模板解耦）。
+
+| 文件 | 作用 |
+|------|------|
+| `ashare_close_fetcher.py` | **抓取脚本**（零第三方依赖，仅标准库）。覆盖主要指数、申万一级 31 行业涨跌幅+主力净流入、北向资金（仅成交额+占比，净买入不编造）、风格指数、个股资金流 TOP 与热点异动。主源东方财富 push2（与数据宝同源），指数回退腾讯 gtimg；输出 JSON/Markdown/CSV，均显式标注数据日期与来源。 |
+| `ashare_close_<date>.json` / `.md` | 某交易日运行产出的样例快照（默认落在 `fundflow/` 内，与脚本同目录）。 |
+
+运行（在本机 Mac 跑可完整取数；沙箱出口代理会拦截东方财富板块类接口）：
+
+```bash
+cd fundflow
+python3 ashare_close_fetcher.py --date 2026-08-25
+# 省略 --date 自动取最近交易日；--json/--md/--csv 可指定输出路径
+# 偶发超时调优：EM_TIMEOUT=8 EM_RETRIES=2 python3 ashare_close_fetcher.py
+```
+
