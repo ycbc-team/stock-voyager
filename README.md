@@ -87,7 +87,7 @@ python3 ashare_close_fetcher.py --fmt csv --out /tmp/x     # 仅申万行业 CSV
 
 `.github/workflows/ashare-report.yml` 会在**每个交易日 15:45（北京时间）收盘后**自动运行脚本并把 HTML 部署到 GitHub Pages：
 
-- 触发：`schedule`（周一至五 07:45 UTC）+ `workflow_dispatch`（可手动触发）
+- 触发：`push`（推 main 即跑）+ `schedule`（周一至五 07:45 UTC）+ `workflow_dispatch`（可手动触发）
 - 流程：`python3 fundflow/ashare_close_fetcher.py`（默认仅 HTML，请求间隔 REQ_DELAY=0.4s）→ 把 `build/ashare_close.html` 作为站点根 `index.html` 上传 → `deploy-pages`
 - 一次性配置：仓库 **Settings → Pages → Source 选「GitHub Actions」**，之后每次运行自动更新站点
 - 手动触发：仓库 **Actions → 选中该工作流 → Run workflow**

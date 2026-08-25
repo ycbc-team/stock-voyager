@@ -1,7 +1,8 @@
 # A股收盘 · 资金流向监控 —— 每日自动生成并部署 GitHub Pages
 #
 # 触发：
-#   - schedule : 每个交易日 15:45（北京时间）= 07:45 UTC 收盘后运行（周一至周五）
+#   - push      : 每次推送到 main 即运行（可当作手动刷新）
+#   - schedule  : 每个交易日 15:45（北京时间）= 07:45 UTC 收盘后运行（周一至周五）
 #   - workflow_dispatch : 支持手动触发（Actions 页 → Run workflow）
 #
 # 流程：checkout → 运行 fundflow/ashare_close_fetcher.py（默认仅 HTML）
@@ -12,6 +13,8 @@
 name: A股收盘资金流日报-自动生成部署
 
 on:
+  push:
+    branches: [main]      # 每次 push 到 main 都运行（也可手动刷新）
   schedule:
     - cron: '45 7 * * 1-5'   # 周一至周五 07:45 UTC = 15:45 北京时间
   workflow_dispatch: {}      # 手动触发
