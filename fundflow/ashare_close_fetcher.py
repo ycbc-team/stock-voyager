@@ -36,8 +36,13 @@ import urllib.error
 # ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
+# 东方财富行情主机：push2 为完整源（申万 90. 指数、kamt 仅此可用）；
+# push2delay 为延迟行情主机，对本机 IP 更宽容（指数/个股/两市额可用，但不含申万与 kamt）。
+# 2026-08-25 实测：push2 系列曾被 EM WAF 对本 IP 限流（http 000/空应答），push2delay 仍可用，
+# 故把 delay 放在第二顺位作降级。
 EM_HOSTS = [
     "https://push2.eastmoney.com",
+    "https://push2delay.eastmoney.com",
     "https://push2his.eastmoney.com",
 ]
 EM_HEADERS = {
@@ -47,6 +52,12 @@ EM_HEADERS = {
 }
 # 东方财富行情接口统一令牌（部分端点需要）
 EM_UT = "fa5fd1943c7b386f172d6893dbfba10b"
+# 数据中心 datacenter-web（报表接口，对 push2 被限流的场景作兜底；北向成交即出自此）
+DC_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120",
+    "Referer": "https://data.eastmoney.com/",
+    "Accept": "*/*",
+}
 GTIMG_HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Referer": "https://gu.qq.com/",
@@ -99,8 +110,18 @@ SOURCE_GT = "腾讯财经 gtimg 接口（回退源）"
 # ---------------------------------------------------------------------------
 # 通用抓取
 # ---------------------------------------------------------------------------
+# 请求计数（用于统计本次运行的总请求量）
+REQ_COUNT = {"n": 0}
+# 每次 HTTP 请求前主动延迟（秒），避免短时间密集请求触发数据源限流；
+# 可用环境变量 REQ_DELAY 调整（0 关闭，如 REQ_DELAY=0.6）
+REQUEST_DELAY = float(os.environ.get("REQ_DELAY", "0.35"))
+
+
 def _http_get(url, headers, timeout=15, retries=3, backoff=1.5):
     last_err = None
+    REQ_COUNT["n"] += 1
+    if REQUEST_DELAY > 0:
+        time.sleep(REQUEST_DELAY)  # 主动限速，分散请求
     for i in range(retries):
         try:
             req = urllib.request.Request(url, headers=headers)
@@ -202,11 +223,25 @@ def detect_trade_date():
 # ---------------------------------------------------------------------------
 # 1) 主要指数
 # ---------------------------------------------------------------------------
-def fetch_indices():
-    out = []
+def _pick_amount(r, *fields):
+    """从多个字段中挑出量级在 1e11~1e13（元，即百亿~万亿）的成交额字段。"""
+    for f in fields:
+        v = _to_float(r.get(f))
+        if v is not None and 1e11 <= abs(v) <= 1e13:
+            return v
+    return None
+
+
+def fetch_market_snapshot():
+    """合并抓取：主要指数 + 国证风格指数 + 两市成交额（一次 ulist 请求，减少请求量）。
+
+    返回 (indices, style_indices, 沪市成交额, 深市成交额, 来源)。
+    沪市成交额取上证指数 f6，深市成交额取深证成指 f6（量级校验，回退 f7/f8/f67）。
+    EM 整体不可用时回退腾讯 gtimg（仅指数报价）。"""
+    out_idx, out_style = [], []
+    sh_amt = sz_amt = None
     src = SOURCE_EM
-    # 东方财富 ulist
-    secids = ",".join(s for _, s in INDICES)
+    secids = ",".join(s for _, s in INDICES) + "," + ",".join(s for _, s in STYLE_INDEX)
     data = em_get("/api/qt/ulist.np/get",
                   {"fields": "f12,f14,f2,f3,f4,f6,f62", "secids": secids})
     if data:
@@ -215,9 +250,8 @@ def fetch_indices():
             code = sid.split(".")[1]
             r = rows.get(code)
             if r:
-                out.append({
-                    "name": name,
-                    "code": code,
+                out_idx.append({
+                    "name": name, "code": code,
                     "close": _to_float(r.get("f2")) / 100 if _to_float(r.get("f2")) is not None else None,
                     "pct": _to_float(r.get("f3")) / 100 if _to_float(r.get("f3")) is not None else None,
                     "chg": _to_float(r.get("f4")) / 100 if _to_float(r.get("f4")) is not None else None,
@@ -225,8 +259,23 @@ def fetch_indices():
                     "turnover": _to_float(r.get("f6")),       # 元（成交额）
                     "source": SOURCE_EM,
                 })
-    # 回退：腾讯 gtimg（仅指数报价，无主力净流入）
-    if not out:
+        for name, sid in STYLE_INDEX:
+            code = sid.split(".")[1]
+            r = rows.get(code)
+            if r:
+                out_style.append({
+                    "name": name, "code": code,
+                    "close": _to_float(r.get("f2")) / 100 if _to_float(r.get("f2")) is not None else None,
+                    "pct": _to_float(r.get("f3")) / 100 if _to_float(r.get("f3")) is not None else None,
+                    "source": SOURCE_EM,
+                })
+        r_sh, r_sz = rows.get("000001"), rows.get("399001")
+        if r_sh:
+            sh_amt = _pick_amount(r_sh, "f6", "f7", "f8", "f67")
+        if r_sz:
+            sz_amt = _pick_amount(r_sz, "f6", "f7", "f8", "f67")
+    # 回退：腾讯 gtimg（仅指数报价，无主力净流入/风格/两市额）
+    if not out_idx:
         src = SOURCE_GT
         want = {s.split(".")[1]: n for n, s in INDICES}
         codes = ",".join(f"sh{c}" if s.startswith("1.") else f"sz{c}" for _, s in INDICES for c in [s.split(".")[1]])
@@ -238,14 +287,13 @@ def fetch_indices():
                     continue
                 name = seg.split("~")[1]
                 parts = seg.split("~")
-                # 用名称反查代码（gtimg 名称与上证指数等一致）
                 code = None
                 for c, n in want.items():
                     if n == name:
                         code = c
                 if code is None:
                     continue
-                out.append({
+                out_idx.append({
                     "name": name, "code": code,
                     "close": _to_float(parts[3]),
                     "pct": _to_float(parts[32]),
@@ -254,7 +302,7 @@ def fetch_indices():
                     "turnover": None,   # gtimg 回退源不取成交额
                     "source": SOURCE_GT,
                 })
-    return out, src
+    return out_idx, out_style, sh_amt, sz_amt, src
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +342,44 @@ def fetch_sw_industry():
 #      (对应的 f54/f58/f62 为港币口径，作回退)
 #    净买入：自 2024-08-19 起不再披露，本脚本一律置 None，绝不编造。
 # ---------------------------------------------------------------------------
+def _fetch_northbound_dc():
+    """东方财富数据中心 RPT_MUTUAL_DEAL_HISTORY：沪/深股通与北向合计成交额。
+    MUTUAL_TYPE：001=沪股通 002=深股通 003/004=港股通(沪/深) 005=北向合计 006=港股通合计
+    DEAL_AMT 单位：百万元 -> 元（×1e6）。kamt 被限流/不可用时的兜底源。"""
+    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    params = {"reportName": "RPT_MUTUAL_DEAL_HISTORY", "columns": "ALL", "pageSize": "30",
+              "sortColumns": "TRADE_DATE,MUTUAL_TYPE", "sortTypes": "-1,1",
+              "source": "WEB", "client": "WEB"}
+    txt = _http_get(f"{url}?{urllib.parse.urlencode(params)}", DC_HEADERS, timeout=15, retries=3)
+    if not txt:
+        return None
+    try:
+        obj = json.loads(txt)
+    except json.JSONDecodeError:
+        return None
+    rows = (obj.get("result") or {}).get("data") or []
+    days = sorted({str(r.get("TRADE_DATE", ""))[:10] for r in rows}, reverse=True)
+    if not days:
+        return None
+    day = days[0]
+    by_type = {}
+    for r in rows:
+        if str(r.get("TRADE_DATE", ""))[:10] == day:
+            by_type[str(r.get("MUTUAL_TYPE"))] = r
+    def deal(t):
+        v = by_type.get(t, {}).get("DEAL_AMT")
+        return v * 1e6 if v is not None else None
+    sh, sz = deal("001"), deal("002")
+    tot = deal("005")
+    if tot is None and sh is not None and sz is not None:
+        tot = sh + sz
+    if sh is None and sz is None and tot is None:
+        return None
+    return {"trade_date": day, "sh_connect_turnover": sh, "sz_connect_turnover": sz,
+            "total_turnover": tot, "available": True,
+            "source": "东方财富数据中心 RPT_MUTUAL_DEAL_HISTORY（kamt 不可用时的兜底）"}
+
+
 def fetch_northbound(sh_amount, sz_amount):
     result = {
         "trade_date": None,
@@ -334,35 +420,26 @@ def fetch_northbound(sh_amount, sz_amount):
                     result["turnover_ratio"] = tot / two_mkt
                 result["available"] = True
                 return result, SOURCE_EM
-    result["source"] = "东方财富 kamt 接口暂不可用（沙箱出口受限/该字段未披露；不编造净买入）"
+    # 兜底：kamt 不可用（被限流等）时改走数据中心 RPT_MUTUAL_DEAL_HISTORY
+    dc = _fetch_northbound_dc()
+    if dc:
+        result["trade_date"] = dc["trade_date"]
+        result["sh_connect_turnover"] = dc["sh_connect_turnover"]
+        result["sz_connect_turnover"] = dc["sz_connect_turnover"]
+        result["total_turnover"] = dc["total_turnover"]
+        two_mkt = (_to_float(sh_amount) or 0) + (_to_float(sz_amount) or 0)
+        if dc["total_turnover"] and two_mkt:
+            result["turnover_ratio"] = dc["total_turnover"] / two_mkt
+        result["available"] = True
+        result["source"] = dc["source"]
+        return result, dc["source"]
+    result["source"] = "东方财富 kamt/数据中心接口均不可用（被限流或未披露；不编造净买入）"
     return result, result["source"]
 
 
 # ---------------------------------------------------------------------------
 # 4) 风格指数（国证风格 + 主题代理）
 # ---------------------------------------------------------------------------
-def fetch_style_indices():
-    out = []
-    src = SOURCE_EM
-    secids = ",".join(s for _, s in STYLE_INDEX)
-    data = em_get("/api/qt/ulist.np/get", {"fields": "f12,f14,f2,f3", "secids": secids})
-    if data:
-        rows = {r.get("f12"): r for r in _diff_list(data.get("data", {}))}
-        for name, sid in STYLE_INDEX:
-            code = sid.split(".")[1]
-            r = rows.get(code)
-            if r:
-                out.append({
-                    "name": name, "code": code,
-                    "close": _to_float(r.get("f2")) / 100 if _to_float(r.get("f2")) is not None else None,
-                    "pct": _to_float(r.get("f3")) / 100 if _to_float(r.get("f3")) is not None else None,
-                    "source": SOURCE_EM,
-                })
-    else:
-        src = "东方财富接口暂不可用（沙箱出口受限，请在本机运行）"
-    return out, src
-
-
 def compute_style_proxy(sw_list):
     """由申万行业涨跌幅聚合出 金融防御/医药景气/科技成长/周期资源 主题代理。"""
     by_code = {x["code"]: x for x in sw_list}
@@ -376,13 +453,14 @@ def compute_style_proxy(sw_list):
 
 # ---------------------------------------------------------------------------
 # 5) 个股资金流 TOP（净流入/净流出）
+#    沪市+深市合并为一次 clist 请求（fs=m:0+t:6,m:1+t:6），每个方向各 1 次 = 共 2 次。
 # ---------------------------------------------------------------------------
 def fetch_stock_fundflow_top(topn=10):
-    rows = []
-    for fs in ("m:0+t:6", "m:1+t:6"):  # 沪市 / 深市 A 股
+    def _fetch(po):
         data = em_get("/api/qt/clist/get",
-                      {"pn": "1", "pz": str(topn), "fs": fs, "po": "1",
+                      {"pn": "1", "pz": str(topn * 3), "fs": "m:0+t:6,m:1+t:6", "po": po,
                        "fields": "f12,f14,f2,f3,f62"})
+        rows = []
         if data:
             for r in _diff_list(data.get("data", {})):
                 rows.append({
@@ -391,22 +469,11 @@ def fetch_stock_fundflow_top(topn=10):
                     "pct": _to_float(r.get("f3")) / 100 if _to_float(r.get("f3")) is not None else None,
                     "main_net_in": _to_float(r.get("f62")),  # 元
                 })
-    rows.sort(key=lambda x: (x["main_net_in"] or -1e30), reverse=True)
-    top_in = rows[:topn]
-    # 净流出：按 f62 升序，重新拉取（po=-1）
-    rows_out = []
-    for fs in ("m:0+t:6", "m:1+t:6"):
-        data = em_get("/api/qt/clist/get",
-                      {"pn": "1", "pz": str(topn), "fs": fs, "po": "-1",
-                       "fields": "f12,f14,f2,f3,f62"})
-        if data:
-            for r in _diff_list(data.get("data", {})):
-                rows_out.append({
-                    "code": str(r.get("f12", "")),
-                    "name": r.get("f14"),
-                    "pct": _to_float(r.get("f3")) / 100 if _to_float(r.get("f3")) is not None else None,
-                    "main_net_in": _to_float(r.get("f62")),
-                })
+        return rows
+    rows_in = _fetch("1")
+    rows_in.sort(key=lambda x: (x["main_net_in"] or -1e30), reverse=True)
+    top_in = rows_in[:topn]
+    rows_out = _fetch("-1")
     rows_out.sort(key=lambda x: (x["main_net_in"] if x["main_net_in"] is not None else 1e30))
     top_out = rows_out[:topn]
     return top_in, top_out, (SOURCE_EM if (top_in or top_out) else "东方财富接口暂不可用（沙箱出口受限，请在本机运行）")
@@ -419,29 +486,6 @@ def compute_hotspots(sw_list, topn=5):
         "hot": valid[:topn],                  # 涨幅居前 = 今日热点
         "weak": valid[-topn:][::-1],           # 跌幅居前 = 今日异动（弱势）
     }
-
-
-# ---------------------------------------------------------------------------
-# 两市成交额（用于北向占比）
-# ---------------------------------------------------------------------------
-def fetch_two_market_amount():
-    """返回 (沪市成交额元, 深市成交额元)。从指数报价中识别成交额字段（量级 1e11~1e13）。"""
-    secids = "1.000001,0.399001"
-    data = em_get("/api/qt/ulist.np/get",
-                  {"fields": "f12,f14,f2,f3,f6,f7,f8,f67", "secids": secids})
-    if not data:
-        return None, None
-    res = {}
-    for r in _diff_list(data.get("data", {})):
-        code = r.get("f12")
-        amt = None
-        for f in ("f7", "f8", "f67", "f6"):
-            v = _to_float(r.get(f))
-            if v is not None and 1e11 <= abs(v) <= 1e13:
-                amt = v
-                break
-        res[code] = amt
-    return res.get("000001"), res.get("399001")
 
 
 # ---------------------------------------------------------------------------
@@ -795,6 +839,31 @@ def write_html(path, result):
         body = _empty_body("申万行业数据暂缺，无法绘制热力图与资金流条形。")
     S.append(_panel("申万一级行业 · 涨跌热力图 & 资金流", "31 行业 · 涨红跌绿", body))
 
+    # ===== 4.5 个股资金流 TOP =====
+    ti, to = result["stock_top_in"], result["stock_top_out"]
+    if ti or to:
+        def _rank_rows(items):
+            rows = []
+            for i, x in enumerate(items[:10], 1):
+                net = h_yi(x.get("main_net_in"))
+                net_s = f"+{net:.2f}亿" if net is not None and net >= 0 else (f"{net:.2f}亿" if net is not None else "—")
+                cls = "up" if (net or 0) >= 0 else "down"
+                pct_s, _ = h_pct(x.get("pct"))
+                rows.append(f'      <div class="rank-row"><div class="rk">{i}</div>'
+                            f'<div class="nm">{x["name"]}<span class="cd">{x.get("code","")}</span>'
+                            f'<span class="cd" style="color:var(--txt2)">{pct_s}</span></div>'
+                            f'<div class="vv {cls}">{net_s}</div></div>')
+            return "\n".join(rows)
+        body = (f'    <div class="g-1-1">\n'
+                f'      <div><div class="p-title" style="margin-bottom:8px"><span class="bar"></span>主力净流入 TOP</div>\n'
+                f'        <div class="rank">\n{_rank_rows(ti)}\n        </div>\n      </div>\n'
+                f'      <div><div class="p-title" style="margin-bottom:8px"><span class="bar"></span>主力净流出 TOP</div>\n'
+                f'        <div class="rank">\n{_rank_rows(to)}\n        </div>\n      </div>\n'
+                f'    </div>\n')
+    else:
+        body = _empty_body("个股资金流数据暂缺（东方财富主源受限时可用 --merge 补全）。")
+    S.append(_panel("个股资金流 TOP STOCK RANK", "主力净额 · 收盘", body))
+
     # ===== 5. 风格指数 + 主题代理 =====
     si = result["style_indices"]
     sp = result["style_proxy"]
@@ -881,31 +950,62 @@ def main():
     ap.add_argument("--fmt", default="html",
                     help="输出格式（逗号分隔，可多选）：json / md / csv / html（默认仅 html）")
     ap.add_argument("--out", help="输出目录（默认 <项目根>/build）")
+    ap.add_argument("--merge", help="补全数据 JSON（东方财富被限流时，用外部/MCP 数据填充缺失模块）")
     ap.add_argument("--topn", type=int, default=10, help="个股资金流 TOP 数量")
     args = ap.parse_args()
 
     data_date = args.date or detect_trade_date()
     print(f"[*] 数据日期: {data_date}")
 
-    indices, idx_src = fetch_indices()
-    print(f"[+] 主要指数: {len(indices)} 条（{idx_src}）")
+    # 1) 主要指数 + 国证风格指数 + 两市成交额：合并为一次 ulist 请求
+    indices, style_idx, sh_amt, sz_amt, idx_src = fetch_market_snapshot()
+    style_src = idx_src  # 风格指数与主要指数同源同请求
+    print(f"[+] 指数 {len(indices)} 条 + 风格 {len(style_idx)} 条（{idx_src}）")
 
     sw_list, sw_src = fetch_sw_industry()
     print(f"[+] 申万一级行业: {len(sw_list)}/31 条（{sw_src}）")
 
-    sh_amt, sz_amt = fetch_two_market_amount()
     nb, nb_src = fetch_northbound(sh_amt, sz_amt)
     print(f"[+] 北向资金: {'可用' if nb['available'] else '暂不可用'}（{nb_src}）")
 
-    style_idx, style_src = fetch_style_indices()
     style_proxy = compute_style_proxy(sw_list)
-    print(f"[+] 风格指数: {len(style_idx)} 条国证 + {len(style_proxy)} 条主题代理")
+    print(f"[+] 风格代理: {len(style_proxy)} 条主题（金融防御/医药景气/科技成长/周期资源）")
 
     top_in, top_out, stock_src = fetch_stock_fundflow_top(args.topn)
     print(f"[+] 个股资金流 TOP: 净流入 {len(top_in)} / 净流出 {len(top_out)} 条（{stock_src}）")
 
     hotspots = compute_hotspots(sw_list)
+
+    # --merge：东方财富被限流时，用外部补全（如 MCP 数据）填充缺失模块
+    merged = False
+    if args.merge and os.path.exists(args.merge):
+        with open(args.merge, encoding="utf-8") as f:
+            over = json.load(f)
+        if over.get("sw_industry") and not sw_list:
+            sw_list = over["sw_industry"]
+            sw_src = over.get("sw_industry_source", "外部补全（MCP：东方财富妙想/腾讯自选股）")
+            merged = True
+        if over.get("northbound") and not nb.get("available"):
+            nb = {**nb, **over["northbound"]}
+            merged = True
+        if over.get("stock_top_in"):
+            top_in = over["stock_top_in"]
+            merged = True
+        if over.get("stock_top_out"):
+            top_out = over["stock_top_out"]
+            merged = True
+        if over.get("stock_source"):
+            stock_src = over["stock_source"]
+        if over.get("style_indices"):
+            style_idx = over["style_indices"]
+            style_src = over.get("style_indices_source", style_src)
+        style_proxy = compute_style_proxy(sw_list)
+        hotspots = over.get("hotspots") or compute_hotspots(sw_list)
+        print(f"[+] --merge {args.merge}：补全 申万 {len(sw_list)}/31、北向 {'可用' if nb.get('available') else '无'}、个股TOP {len(top_in)}/{len(top_out)}")
+
     overall_source = SOURCE_EM if (sw_list or nb["available"] or top_in) else "腾讯gtimg(指数回退)+东方财富(受限)"
+    if merged:
+        overall_source += "（主源受限，部分模块由外部数据补全）"
 
     result = {
         "data_date": data_date,
@@ -963,6 +1063,7 @@ def main():
     print(f"\n[✓] 已写出（{data_date}，目录 {out_dir}）：")
     for w in written:
         print("    " + w)
+    print(f"[i] 本次共发起 {REQ_COUNT['n']} 次 HTTP 请求（含失败重试；请求间隔 {REQUEST_DELAY}s）")
     return result
 
 
