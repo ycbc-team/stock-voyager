@@ -1,59 +1,68 @@
-# 股票分析页 · 可复用布局模板
+# stock-voyager
 
-把已上线港股分析页的**视觉布局**落地为可复用文件。布局（暗色金融终端风、卡片 + 8 模块纯 CSS 弹窗、ROE 达标名单、推荐组合）固定不变；所有**数据/文案**集中在 `data.json`，换市场只改数据，不改布局。
+静态股票分析页面生成项目。当前主流程会统一生成 4 个页面：
 
-> 零 JS、纯静态输出，移动端 Safari 可直接打开（已规避手机端不执行 `<script>` 的坑）。
+- `build/index.html`：站点导航首页
+- `build/fundflow.html`：A 股资金流日报
+- `build/stocktrend_ashare.html`：A 股个股走势
+- `build/stocktrend_hk.html`：港股个股走势
 
-## 文件说明
+> 全部为零 JS 静态 HTML，适合 GitHub Pages 等静态部署。
+
+## 当前目录角色
+
+| 路径 | 作用 |
+|------|------|
+| `main.py` | 仓库主入口。统一生成首页、`fundflow`、`stocktrend` 页面。 |
+| `common/` | 公共模块。包括请求逻辑、JSON 读写、站点导航、缓存目录等。 |
+| `fundflow/` | A 股资金流页面模块。 |
+| `stocktrend/` | A 股 / 港股个股走势页面模块。 |
+| `build/` | 运行后生成的 JSON / HTML 产物目录。 |
+| `common/cache/` | 长期稳定缓存目录。 |
+
+## 页面组织方式
+
+当前站点不是把 3 张内容页硬塞到单个 HTML 里，而是采用：
+
+1. 一个导航首页 `build/index.html`
+2. 三个独立内容页
+3. 每个内容页底部带静态 tab 导航
+
+这样做的好处是：
+
+- 静态部署最兼容
+- 每页都能单独打开和分享
+- 页面内容互不耦合，后续继续扩展更轻
+
+## stocktrend 当前结构
+
+`stocktrend` 已经完成从旧模板链路到新主流程的切换：
 
 | 文件 | 作用 |
 |------|------|
-| `data.json` | **数据源**（唯一需要改的文件）。含页面文案、板块、组合、每只个股的行情与真实财务。当前示例 = 40 只港股真实数据。 |
-| `build.py`  | **布局引擎**（固定）。含 CSS + 渲染函数，读取 `data.json` 生成静态 `index.html`。一般无需改动。 |
-| `index.html`| 每次运行 `build.py` 重新生成的最终页面（可直接部署/分享）。 |
+| `stocktrend_data_fetcher.py` | 生成 `stocktrend` 的 JSON 中间产物。 |
+| `stocktrend_ui_renderer.py` | 读取 JSON 并渲染 HTML。 |
+| `stocktrend_static_data.py` | 港股基础静态数据。 |
+| `stocktrend_style.css` | `stocktrend` 页面样式。 |
 
-## 复用步骤（换一种市场分析）
+旧的 `data.json`、`build.py`、`stocktrend/index.html` 已经移除，不再参与当前流程。
 
-1. **改数据源**：编辑 `data.json`。
-   - `meta`：标题、标签、副标题、页脚、各项免责/口径说明（含 `modal_databadge` 弹窗内口径说明）、`snap_iso` 快照日期。
-   - `sectors`：板块分组（key 需与个股 `sector` 字段对应，title/label/color 自定义）。
-   - `combos`：推荐组合（cls 决定配色，codes 引用个股 code，desc 说明）。
-   - `stocks`：个股数组，字段见下方 schema。
-2. **生成页面**：在 `stock-template/` 目录运行
-   ```
-   python build.py
-   ```
-   得到同目录 `index.html`。
-3. **发布**（可选）：用 CloudStudio 部署 `stock-template/` 目录，得到可分享链接。
+## 运行方式
 
-## data.json 字段 schema（stocks 数组每个对象）
+推荐直接从仓库根目录运行：
 
-| 字段 | 含义 | 示例 |
-|------|------|------|
-| `code` | 股票代码 | `"00700"` |
-| `zh` / `en` | 中文名 / 英文名 | `"腾讯控股"` |
-| `l1` / `l2` / `l2_code` | 一级/二级类别名 + 二级代码 | `"资讯科技业"` |
-| `sector` | 所属板块 key（对应 sectors.key） | `"tech"` |
-| `signal` | 推荐信号索引：0=🟢可分批 / 1=🟡持有 / 2=🔴谨慎 | `0` |
-| `border` | 卡片左边框配色 class | `"yellow"` |
-| `price` `chg` `pe` `pb` `div` `mkt` `pos` | 现价/涨跌%/PE/PB/股息率%/市值/52周分位 | `512.0` |
-| `w52l` `w52h` `open` `prev` `turn` `amount` | 52周低/高/今开/昨收/换手率/成交额 | `198.6` |
-| `chg5` `chg20` `chg60` `ytd` | 近5/20/60日、年初至今涨跌% | `3.2` |
-| `capital` | 资金面描述文本 | `"南向持续净流入…"` |
-| `risks` | 风险提示列表（3 条） | `["…","…","…"]` |
-| `roe` `margin` `liab` `south` | 真实 ROE% / 毛利率% / 资产负债率% / 南向(港股通)持股% | `21.13` |
-| `div5` | 近5年每股股息(HKD)，无/未分红用 `null` | `[null,null,3.40,4.50,5.30]` |
-| `suggest` `summary` `trend` | 建仓建议/一句话总结/走势（可选扩展字段） | `"…"` |
+```bash
+./.venv/bin/python main.py
+./.venv/bin/python main.py --date 2026-08-25
+```
 
-> `margin` 为 `null` 时渲染"不适用"（金融/资源业不适用毛利率）。
+也可以只跑单个模块：
 
-## 需要微调布局时（少数情况）
-
-以下属于**布局层**，若切换到 A 股/美股等需相应改名，直接在 `build.py` 中改即可：
-- 模块标题与标签（如 M3「南向(港股通)持股」→ A股可改「北向持股」；M4 注释口径说明）。
-- 配色、卡片网格、弹窗宽度等 CSS。
-
-常规换市场**不必动 `build.py`**，只改 `data.json`。
+```bash
+./.venv/bin/python fundflow/fundflow_main.py
+./.venv/bin/python stocktrend/stocktrend_data_fetcher.py --market all
+./.venv/bin/python stocktrend/stocktrend_ui_renderer.py
+```
 
 ## `fundflow/` —— A股收盘资金流抓取模块
 
@@ -72,11 +81,14 @@
 
 | 产物 | 说明 |
 |------|------|
+| `build/index.html` | 站点导航首页，统一链接到三张业务页面。 |
 | `build/fundflow.html` | **默认输出**。纯静态网页报告（数据内联、零 JS），移动端 Safari 可直接打开；打开/刷新即见最新。 |
+| `build/stocktrend_ashare.html` | A 股个股走势页。 |
+| `build/stocktrend_hk.html` | 港股个股走势页。 |
 | `build/fundflow.json` | `fundflow` 汇总 JSON。 |
 | `build/fundflow_*.json` / `build/stocktrend_*.json` | 各请求模块拆分后的 JSON 产物，供跨页面复用。 |
 
-**日常用法**：每天跑一次 py 更新数据，打开 `build/fundflow.html` 即见最新报告。
+**日常用法**：每天跑一次主脚本，打开 `build/index.html` 进入站点首页。
 
 ```bash
 ./.venv/bin/python main.py
@@ -95,7 +107,7 @@
 `.github/workflows/ashare-report.yml` 会在**每个交易日 15:45（北京时间）收盘后**自动运行脚本并把 HTML 部署到 GitHub Pages：
 
 - 触发：`push`（推 main 即跑）+ `schedule`（周一至五 07:45 UTC）+ `workflow_dispatch`（可手动触发）
-- 流程：`python3 main.py`（统一产出 `fundflow` + `stocktrend` JSON / HTML）→ 把 `build/fundflow.html` 作为站点根 `index.html` 上传，并附带 `stocktrend_ashare.html` / `stocktrend_hk.html` → `deploy-pages`
+- 流程：`python3 main.py`（统一产出首页 + `fundflow` + `stocktrend` JSON / HTML）→ 把 `build/index.html` 作为站点根首页上传，并附带三个业务页面 → `deploy-pages`
 - 一次性配置：仓库 **Settings → Pages → Source 选「GitHub Actions」**，之后每次运行自动更新站点
 - 手动触发：仓库 **Actions → 选中该工作流 → Run workflow**
-- 站点地址：`https://<owner>.github.io/<repo>/`（根路径即最新报告）
+- 站点地址：`https://<owner>.github.io/<repo>/`（根路径即导航首页）
