@@ -61,7 +61,7 @@
 
 | 文件 | 作用 |
 |------|------|
-| `ashare_close_fetcher.py` | **抓取 + 出报告脚本**（零第三方依赖，仅标准库）。覆盖主要指数、申万一级 31 行业涨跌幅+主力净流入、北向资金（仅成交额+占比，净买入不编造）、风格指数、个股资金流 TOP 与热点异动。主源东方财富 push2（与数据宝同源），指数回退腾讯 gtimg。 |
+| `ashare_close_fetcher.py` | **抓取 + 出报告脚本**。覆盖主要指数、申万一级 31 行业涨跌幅 + 按申万成分股聚合的主力净流入、北向资金（仅成交额+占比，净买入不编造）、风格指数、个股资金流 TOP 与热点异动。抓取层使用 `AKShare`，指数回退腾讯 gtimg；个股资金流优先按申万成分股 `secid` 分批请求，行业聚合与个股 TOP 共用同一批数据。 |
 | `report.css` | 网页报告样式源（深色金融终端风、涨红跌绿），生成 HTML 时**内联**进产物，保证 HTML 单文件自包含。 |
 
 **输出**（默认写入项目根 `build/`，已 gitignore；文件名固定无日期，每天运行覆盖前一天）：
@@ -75,13 +75,20 @@
 
 ```bash
 cd fundflow
-python3 ashare_close_fetcher.py                            # 默认仅输出 HTML
-python3 ashare_close_fetcher.py --fmt json,md,html         # 同时输出 JSON + Markdown + HTML
-python3 ashare_close_fetcher.py --fmt csv --out /tmp/x     # 仅申万行业 CSV，自定义目录
-# 省略 --date 自动取最近交易日；偶发超时调优：EM_TIMEOUT=8 EM_RETRIES=2 python3 ashare_close_fetcher.py
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r ../requirements.txt
+python ashare_close_fetcher.py                             # 默认仅输出 HTML
+python ashare_close_fetcher.py --fmt json,md,html          # 同时输出 JSON + Markdown + HTML
+python ashare_close_fetcher.py --fmt csv --out /tmp/x      # 仅申万行业 CSV，自定义目录
+# 省略 --date 自动取最近交易日；偶发超时调优：
+# EM_TIMEOUT=8 EM_RETRIES=2 FUND_FLOW_BATCH_SIZE=400 python3 ashare_close_fetcher.py
 ```
 
-> 注：在 WorkBuddy 沙箱内东方财富板块类接口会被出口代理拦截，只有指数走腾讯回退、其余模块显示「数据暂缺」；在本机 Mac 直接运行即可完整取数并生成全量报告。
+> 注：
+> 1. `fundflow/.cache/` 需要随仓库提交，避免 GitHub Actions 每次都是全量回源。
+> 2. 申万一级映射和申万成分股映射属于长周期静态数据，默认缓存 180 天；可用 `FUND_STATIC_CACHE_TTL_HOURS` 调整。
+> 3. 个股资金流默认按 `FUND_FLOW_BATCH_SIZE=400` 分批请求 `push2delay`，比全市场分页排行请求数更低。
 
 ## 自动部署（GitHub Actions + Pages）
 

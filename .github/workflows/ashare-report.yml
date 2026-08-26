@@ -43,12 +43,20 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: 安装依赖
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
       - name: 运行资金流抓取脚本（默认仅生成 HTML 到 build/）
         env:
           TZ: Asia/Shanghai
           REQ_DELAY: '0.4'   # 请求间隔，避免触发数据源限流
         run: |
-          python3 fundflow/ashare_close_fetcher.py
+          . .venv/bin/activate
+          python fundflow/ashare_close_fetcher.py
           echo "--- build/ 内容 ---"
           ls -la build/
 

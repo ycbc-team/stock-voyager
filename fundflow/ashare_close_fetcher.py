@@ -4,24 +4,29 @@
 A股收盘数据获取脚本
 ====================
 数据口径 : 当日收盘后（默认取"最近一个已收盘交易日"；可用 --date YYYY-MM-DD 覆盖）
-数据来源 : 东方财富 East Money 公开行情接口 push2 / datacenter
-          （与"证券时报·数据宝"收盘表同源：申万一级行业、主力资金净流入、北向成交额均出自此）
-          指数/个股回退源 : 腾讯财经 gtimg（沙箱环境下更稳，作为回退）
+数据来源 :
+  - 主要指数 / 风格指数 / 两市成交额 / 北向成交额：东方财富公开接口，指数回退腾讯 gtimg
+  - 申万一级涨跌幅：AKShare -> 申万指数实时行情
+  - 申万一级主力净流入：AKShare 申万成分映射 + 东方财富个股资金流按申万一级成分股聚合
 重要约定 :
-  1. 北向资金净买入自 2024-08-19 起不再实时披露。本脚本只取【成交额】与【成交占比】，
+  1. 页面中的"申万一级行业主力净流入"为脚本按个股资金流聚合后的统计值，
+     不是东方财富行业页的原始字段，因此不展示东财行业页口径文案。
+  2. 北向资金净买入自 2024-08-19 起不再实时披露。本脚本只取【成交额】与【成交占比】，
      绝不编造净买入数字；即便接口返回净买额字段，也统一置 None 并标注"不再披露"。
-  2. 所有输出显式标注 数据日期 与 数据来源。
+  3. 长周期静态数据（申万一级映射、申万成分股映射）写入 fundflow/.cache/，
+     默认缓存 180 天并随仓库提交，避免 CI 每次全量回源。
+  4. 个股资金流优先按申万成分股 secid 分批请求，行业聚合与个股 TOP 共享同一批数据，
+     默认批大小 400，减少全市场分页请求和风控风险。
 输出格式 : 默认仅 HTML 网页报告；可用 --fmt 选择 json / md / csv / html（逗号分隔，可多选）
           所有产物写入 <项目根>/build/ 目录，文件名固定（无日期），每天运行覆盖前一天。
-依赖     : 仅 Python 标准库（urllib / json / datetime / argparse），零第三方依赖，可裸跑。
+依赖     : Python 标准库 + AKShare（见 requirements.txt）。
 用法     :
   python3 ashare_close_fetcher.py                            # 取最近交易日，默认仅输出 HTML -> build/ashare_close.html
   python3 ashare_close_fetcher.py --date 2026-08-25          # 指定数据日期
   python3 ashare_close_fetcher.py --fmt json,md,html         # 同时输出 JSON + Markdown + HTML
-  python3 ashare_close_fetcher.py --fmt csv --out /tmp/x     # 仅申万行业 CSV，自定义输出目录
-注意     : 在 WorkBuddy 自动化沙箱内，东方财富 push2 数据接口可能被出口代理拦截；
-           此时脚本会自动回退到腾讯 gtimg 取指数，并在申万/北向/资金流模块标注"接口暂不可用"。
-           在本机（Mac/PC 正常网络）运行可取得完整数据。
+  python3 ashare_close_fetcher.py --fmt csv --out /tmp/x     # 仅申万行业 CSV，自定义目录
+注意     : 在 WorkBuddy 自动化沙箱内，部分公开接口可能被出口代理拦截；
+           此时脚本会尽量回退，并在申万/北向/资金流模块标注"接口暂不可用"。
 """
 import argparse
 import datetime
@@ -62,7 +67,6 @@ GTIMG_HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Referer": "https://gu.qq.com/",
 }
-
 # 主要指数 secid（东方财富格式：1=上交所 0=深交所；中证指数用 1. 前缀）
 INDICES = [
     ("上证指数", "1.000001"),
@@ -105,6 +109,7 @@ STYLE_PROXY = {
 
 SOURCE_EM = "东方财富 East Money 公开行情接口（与证券时报·数据宝同源）"
 SOURCE_GT = "腾讯财经 gtimg 接口（回退源）"
+SOURCE_SW = "AKShare 申万一级指数 + 东方财富个股资金流聚合"
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +120,62 @@ REQ_COUNT = {"n": 0}
 # 每次 HTTP 请求前主动延迟（秒），避免短时间密集请求触发数据源限流；
 # 可用环境变量 REQ_DELAY 调整（0 关闭，如 REQ_DELAY=0.6）
 REQUEST_DELAY = float(os.environ.get("REQ_DELAY", "0.35"))
+CACHE_TTL_HOURS = int(os.environ.get("FUND_CACHE_TTL_HOURS", str(24 * 7)))
+STATIC_CACHE_TTL_HOURS = int(os.environ.get("FUND_STATIC_CACHE_TTL_HOURS", str(24 * 180)))
+FUND_FLOW_BATCH_SIZE = int(os.environ.get("FUND_FLOW_BATCH_SIZE", "400"))
+FUND_FLOW_BATCH_HOST = os.environ.get("FUND_FLOW_BATCH_HOST", "https://push2delay.eastmoney.com")
+
+
+def _script_dirs():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(script_dir)
+    cache_dir = os.path.join(script_dir, ".cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    return script_dir, root_dir, cache_dir
+
+
+def _cache_path(name):
+    _, _, cache_dir = _script_dirs()
+    return os.path.join(cache_dir, name)
+
+
+def _load_cache(name, max_age_hours=CACHE_TTL_HOURS):
+    path = _cache_path(name)
+    if not os.path.exists(path):
+        return None
+    age_sec = time.time() - os.path.getmtime(path)
+    if age_sec > max_age_hours * 3600:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_cache(name, data):
+    path = _cache_path(name)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _akshare():
+    try:
+        import akshare as ak  # type: ignore
+        return ak
+    except ImportError:
+        raise SystemExit("缺少依赖 akshare。请先创建 venv 并执行 `pip install -r requirements.txt`。")
+
+
+def _count_external_request(n=1):
+    REQ_COUNT["n"] += n
+
+
+def _paced_call(fn, *args, **kwargs):
+    if REQUEST_DELAY > 0:
+        time.sleep(REQUEST_DELAY)
+    _count_external_request()
+    return fn(*args, **kwargs)
 
 
 def _http_get(url, headers, timeout=15, retries=3, backoff=1.5):
@@ -165,6 +226,44 @@ def em_get(path, params, timeout=None, retries=None):
                     return obj
             except json.JSONDecodeError:
                 continue
+    return None
+
+
+def dc_get(params, timeout=None, retries=None):
+    if timeout is None:
+        timeout = int(os.environ.get("EM_TIMEOUT", "15"))
+    if retries is None:
+        retries = int(os.environ.get("EM_RETRIES", "3"))
+    base = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    url = f"{base}?{urllib.parse.urlencode(params)}"
+    txt = _http_get(url, DC_HEADERS, timeout=timeout, retries=retries)
+    if not txt:
+        return None
+    try:
+        return json.loads(txt)
+    except json.JSONDecodeError:
+        return None
+
+
+def em_get_direct(host, path, params, timeout=None, retries=None):
+    """直接请求指定东财 host，避免在已知稳定的延迟主机上额外探测其他域名。"""
+    if timeout is None:
+        timeout = int(os.environ.get("EM_TIMEOUT", "15"))
+    if retries is None:
+        retries = int(os.environ.get("EM_RETRIES", "3"))
+    if "ut" not in params:
+        params = {**params, "ut": EM_UT}
+    q = urllib.parse.urlencode(params)
+    url = f"{host}{path}?{q}&_={int(time.time()*1000)}"
+    txt = _http_get(url, EM_HEADERS, timeout=timeout, retries=retries)
+    if not txt:
+        return None
+    try:
+        obj = json.loads(txt)
+    except json.JSONDecodeError:
+        return None
+    if obj.get("rc") == 0 and obj.get("data") is not None:
+        return obj
     return None
 
 
@@ -306,32 +405,333 @@ def fetch_market_snapshot():
 
 
 # ---------------------------------------------------------------------------
-# 2) 申万一级行业：涨跌幅 + 主力资金净流入
-#    采用与指数同款的 ulist.np + 31 个申万一级行业指数 secid（90.801010…），
-#    可同时取 涨跌幅(f3) 与 主力净流入(f62)，且不受行业板块分类(东方财富/申万)切换影响。
+# 2) 申万一级行业：指数涨跌幅 + 个股资金流聚合
+#    涨跌幅来自申万一级指数公开页；主力净流入来自东方财富全市场个股资金流按申万一级映射聚合。
 # ---------------------------------------------------------------------------
-def fetch_sw_industry():
-    secids = ",".join(f"90.{c}" for c in SW_INDUSTRY.keys())
-    data = em_get("/api/qt/ulist.np/get",
-                  {"fields": "f12,f14,f2,f3,f62", "secids": secids})
+def _load_sw_mapping_from_cache():
+    cached = _load_cache("sw_mapping.json")
+    if not cached:
+        return None
+    by_code = cached.get("by_code") or {}
+    if not by_code:
+        return None
+    return cached
+
+
+def fetch_sw_mapping():
+    cached = _load_cache("sw_mapping.json", max_age_hours=STATIC_CACHE_TTL_HOURS)
+    if cached and (cached.get("by_code") or {}):
+        return cached, "本地缓存"
+    cached = _load_sw_mapping_from_cache()
+    if cached:
+        return cached, "本地缓存"
+    by_code = {k: {"code": k, "name": v} for k, v in SW_INDUSTRY.items()}
+    cache_payload = {
+        "by_code": by_code,
+        "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    _save_cache("sw_mapping.json", cache_payload)
+    return cache_payload, "内置申万一级常量"
+
+
+def fetch_sw_index_spot():
+    ak = _akshare()
+    try:
+        df = _paced_call(ak.index_realtime_sw, symbol="一级行业")
+    except Exception as e:
+        return [], f"AKShare 申万一级指数接口暂不可用: {e}"
     out = []
-    if data:
-        for r in _diff_list(data.get("data", {})):
-            code = str(r.get("f12", "")).replace("90.", "")
-            if code not in SW_INDUSTRY:
+    for row in df.to_dict("records"):
+        code = str(row.get("指数代码") or "").replace(".SI", "").strip()
+        if code not in SW_INDUSTRY:
+            continue
+        prev = _to_float(row.get("昨收盘"))
+        close = _to_float(row.get("最新价"))
+        pct = None
+        if prev not in (None, 0) and close is not None:
+            pct = (close - prev) / prev * 100
+        out.append({
+            "code": code,
+            "name": SW_INDUSTRY[code],
+            "close": close,
+            "pct": pct,
+            "source": "AKShare 申万一级指数实时行情",
+        })
+    return out, ("AKShare 申万一级指数实时行情" if out else "AKShare 申万一级指数接口暂不可用")
+
+
+def _market_by_code(code):
+    if code.startswith(("600", "601", "603", "605", "688", "689")):
+        return "sh"
+    if code.startswith(("000", "001", "002", "003", "300", "301")):
+        return "sz"
+    if code.startswith(("430", "830", "831", "832", "833", "834", "835", "836", "837", "838", "839", "870", "871", "872", "873", "874", "875", "876", "877", "878", "879", "880", "920")):
+        return "bj"
+    return None
+
+
+def _secid_from_code(code):
+    market = _market_by_code(code)
+    if market == "sh":
+        return f"1.{code}"
+    if market in ("sz", "bj"):
+        return f"0.{code}"
+    return None
+
+
+def _iter_chunks(items, size):
+    if size <= 0:
+        size = 200
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+def _fetch_stock_fundflow_by_secid_batches(stock_codes, indicator="今日"):
+    """按 secid 批量请求个股涨跌幅和主力净流入。
+
+    这里直接复用已缓存的申万成分股映射，只请求实际需要聚合的股票，
+    避免对全市场排行做分页扫描。
+    """
+    if indicator != "今日":
+        return [], "secid 批量资金流当前仅支持今日口径"
+    secids = []
+    secid_to_code = {}
+    for code in sorted({str(x).zfill(6) for x in (stock_codes or []) if x}):
+        secid = _secid_from_code(code)
+        if not secid:
+            continue
+        secids.append(secid)
+        secid_to_code[secid] = code
+    if not secids:
+        return [], "申万成分股映射为空，无法做 secid 批量资金流请求"
+
+    fields = "f12,f14,f2,f3,f62"
+    rows_by_code = {}
+    pending = list(secids)
+    batch_plan = [FUND_FLOW_BATCH_SIZE]
+    if FUND_FLOW_BATCH_SIZE > 80:
+        batch_plan.append(80)
+
+    for batch_size in batch_plan:
+        if not pending:
+            break
+        next_pending = []
+        for batch in _iter_chunks(pending, batch_size):
+            obj = em_get_direct(
+                FUND_FLOW_BATCH_HOST,
+                "/api/qt/ulist.np/get",
+                {
+                    "fields": fields,
+                    "secids": ",".join(batch),
+                    "fltt": "2",
+                    "invt": "2",
+                    "np": "1",
+                },
+                timeout=20,
+                retries=2,
+            )
+            if not obj:
+                next_pending.extend(batch)
                 continue
-            f2 = _to_float(r.get("f2"))
-            f3 = _to_float(r.get("f3"))
-            out.append({
+            diff = _diff_list((obj.get("data") or {}))
+            if not diff:
+                next_pending.extend(batch)
+                continue
+            seen_codes = set()
+            for r in diff:
+                code = str(r.get("f12") or "").zfill(6)
+                if not code:
+                    continue
+                seen_codes.add(code)
+                pct_raw = _to_float(r.get("f3"))
+                rows_by_code[code] = {
+                    "code": code,
+                    "name": r.get("f14"),
+                    "market": _market_by_code(code),
+                    "pct": pct_raw / 100 if pct_raw is not None else None,
+                    "main_net_in": _to_float(r.get("f62")),
+                }
+            for secid in batch:
+                code = secid_to_code.get(secid)
+                if code and code not in seen_codes and code not in rows_by_code:
+                    next_pending.append(secid)
+        pending = next_pending
+
+    rows = [rows_by_code[code] for code in sorted(rows_by_code)]
+    if not rows:
+        return [], "东方财富延迟行情主机 secid 批量接口暂不可用"
+    covered = len(rows)
+    total = len(secids)
+    if pending:
+        return rows, f"东方财富延迟行情主机 secid 批量资金流（覆盖 {covered}/{total}，未命中批次已跳过）"
+    return rows, f"东方财富延迟行情主机 secid 批量资金流（覆盖 {covered}/{total}）"
+
+
+def fetch_all_stock_fundflow_rank(indicator="今日", stock_codes=None):
+    if stock_codes:
+        rows, batch_src = _fetch_stock_fundflow_by_secid_batches(stock_codes, indicator=indicator)
+        if rows:
+            return rows, batch_src
+    ak = _akshare()
+    try:
+        df = _paced_call(ak.stock_individual_fund_flow_rank, indicator=indicator)
+    except Exception as e:
+        rows, fallback_src = _fetch_stock_fundflow_rank_em_fallback(indicator)
+        if rows:
+            return rows, f"AKShare 失败，已回退到东方财富延迟行情主机: {fallback_src}"
+        return [], f"AKShare 个股资金流排行接口暂不可用: {e}"
+    prefix = indicator
+    rows = []
+    pct_col = f"{prefix}涨跌幅"
+    net_col = f"{prefix}主力净流入-净额"
+    for r in df.to_dict("records"):
+        code = str(r.get("代码") or "").zfill(6)
+        market = _market_by_code(code)
+        if not market:
+            continue
+        rows.append({
+            "code": code,
+            "name": r.get("名称"),
+            "market": market,
+            "pct": _to_float(r.get(pct_col)),
+            "main_net_in": _to_float(r.get(net_col)),
+        })
+    return rows, ("AKShare 个股资金流全市场排行" if rows else "AKShare 个股资金流排行接口暂不可用")
+
+
+def _fetch_stock_fundflow_rank_em_fallback(indicator="今日"):
+    indicator_map = {
+        "今日": [
+            "f62",
+            "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f204,f205,f124",
+            "f3",
+            "f62",
+        ],
+        "3日": [
+            "f267",
+            "f12,f14,f2,f127,f267,f268,f269,f270,f271,f272,f273,f274,f275,f276,f257,f258,f124",
+            "f127",
+            "f267",
+        ],
+        "5日": [
+            "f164",
+            "f12,f14,f2,f109,f164,f165,f166,f167,f168,f169,f170,f171,f172,f173,f257,f258,f124",
+            "f109",
+            "f164",
+        ],
+        "10日": [
+            "f174",
+            "f12,f14,f2,f160,f174,f175,f176,f177,f178,f179,f180,f181,f182,f183,f260,f261,f124",
+            "f160",
+            "f174",
+        ],
+    }
+    cfg = indicator_map.get(indicator)
+    if not cfg:
+        return [], "不支持的 indicator"
+    fid, fields, pct_key, net_key = cfg
+    params = {
+        "fid": fid,
+        "po": "1",
+        "pz": "100",
+        "pn": "1",
+        "np": "1",
+        "fltt": "2",
+        "invt": "2",
+        "ut": "b2884a393a59ad64002292a3e90d46a5",
+        "fs": "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2,m:0+t:7+f:!2,m:1+t:3+f:!2",
+        "fields": fields,
+    }
+    host = "https://push2delay.eastmoney.com"
+    first = em_get("/api/qt/clist/get", params)
+    if not first:
+        q = urllib.parse.urlencode(params)
+        txt = _http_get(f"{host}/api/qt/clist/get?{q}", EM_HEADERS, timeout=20, retries=2)
+        if not txt:
+            return [], "东方财富延迟行情主机不可用"
+        try:
+            first = json.loads(txt)
+        except json.JSONDecodeError:
+            return [], "东方财富延迟行情主机返回非 JSON"
+    total = (((first or {}).get("data") or {}).get("total") or 0)
+    rows = []
+    total_page = max(1, (int(total) + 99) // 100)
+    for page in range(1, total_page + 1):
+        params["pn"] = str(page)
+        q = urllib.parse.urlencode(params)
+        txt = _http_get(f"{host}/api/qt/clist/get?{q}", EM_HEADERS, timeout=20, retries=2)
+        if not txt:
+            break
+        try:
+            obj = json.loads(txt)
+        except json.JSONDecodeError:
+            break
+        diff = _diff_list((obj or {}).get("data") or {})
+        if not diff:
+            break
+        for r in diff:
+            code = str(r.get("f12") or "").zfill(6)
+            market = _market_by_code(code)
+            if not market:
+                continue
+            pct_raw = _to_float(r.get(pct_key))
+            rows.append({
                 "code": code,
-                "name": SW_INDUSTRY[code],
-                # 指数类 f2 单位为"分"(×100)，需 /100；若已是真实值则 /100 也无妨（申万指数均 >100）
-                "close": f2 / 100 if f2 is not None else None,
-                "pct": f3 / 100 if f3 is not None else None,
-                "main_net_in": _to_float(r.get("f62")),  # 元
-                "source": SOURCE_EM,
+                "name": r.get("f14"),
+                "market": market,
+                "pct": pct_raw / 100 if pct_raw is not None else None,
+                "main_net_in": _to_float(r.get(net_key)),
             })
-    return out, (SOURCE_EM if out else "东方财富接口暂不可用（沙箱出口受限，请在本机运行）")
+    return rows, ("东方财富延迟行情主机个股资金流全市场排行" if rows else "东方财富延迟行情主机个股资金流接口暂不可用")
+
+
+def fetch_sw_stock_map():
+    cached = _load_cache("sw_stock_map.json", max_age_hours=STATIC_CACHE_TTL_HOURS)
+    if cached and cached.get("stock_to_industry"):
+        return cached["stock_to_industry"], "本地缓存"
+    ak = _akshare()
+    stock_to_industry = {}
+    for code, name in SW_INDUSTRY.items():
+        try:
+            df = _paced_call(ak.index_component_sw, symbol=code)
+        except Exception:
+            continue
+        for row in df.to_dict("records"):
+            stock_code = str(row.get("证券代码") or "").zfill(6)
+            if stock_code:
+                stock_to_industry[stock_code] = code
+    if not stock_to_industry:
+        return {}, "AKShare 申万成分股接口暂不可用"
+    payload = {
+        "stock_to_industry": stock_to_industry,
+        "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    _save_cache("sw_stock_map.json", payload)
+    return stock_to_industry, "AKShare 申万成分股"
+
+
+def build_sw_industry(sw_spot, stock_rows, sw_mapping, stock_to_industry):
+    sw_map = (sw_mapping or {}).get("by_code") or {k: {"code": k, "name": v} for k, v in SW_INDUSTRY.items()}
+    sums = {}
+    for row in stock_rows:
+        code = row["code"]
+        ind_code = stock_to_industry.get(code)
+        if ind_code not in sw_map:
+            continue
+        sums[ind_code] = sums.get(ind_code, 0.0) + (_to_float(row.get("main_net_in")) or 0.0)
+    out = []
+    for x in sw_spot:
+        code = x["code"]
+        meta = sw_map.get(code) or {"code": code, "name": x["name"]}
+        out.append({
+            "code": code,
+            "name": meta["name"],
+            "close": x.get("close"),
+            "pct": x.get("pct"),
+            "main_net_in": sums.get(code),
+            "source": SOURCE_SW,
+        })
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -453,30 +853,21 @@ def compute_style_proxy(sw_list):
 
 # ---------------------------------------------------------------------------
 # 5) 个股资金流 TOP（净流入/净流出）
-#    沪市+深市合并为一次 clist 请求（fs=m:0+t:6,m:1+t:6），每个方向各 1 次 = 共 2 次。
+#    直接复用 AKShare 的全市场排行结果，避免额外请求。
 # ---------------------------------------------------------------------------
-def fetch_stock_fundflow_top(topn=10):
-    def _fetch(po):
-        data = em_get("/api/qt/clist/get",
-                      {"pn": "1", "pz": str(topn * 3), "fs": "m:0+t:6,m:1+t:6", "po": po,
-                       "fields": "f12,f14,f2,f3,f62"})
-        rows = []
-        if data:
-            for r in _diff_list(data.get("data", {})):
-                rows.append({
-                    "code": str(r.get("f12", "")),
-                    "name": r.get("f14"),
-                    "pct": _to_float(r.get("f3")) / 100 if _to_float(r.get("f3")) is not None else None,
-                    "main_net_in": _to_float(r.get("f62")),  # 元
-                })
-        return rows
-    rows_in = _fetch("1")
-    rows_in.sort(key=lambda x: (x["main_net_in"] or -1e30), reverse=True)
+def fetch_stock_fundflow_top(topn=10, stock_rows=None, stock_source=None):
+    rows = list(stock_rows or [])
+    if not rows:
+        rows, src = fetch_all_stock_fundflow_rank("今日")
+    else:
+        src = stock_source or "个股资金流"
+    rows_in = [x for x in rows if x.get("main_net_in") is not None]
+    rows_in.sort(key=lambda x: x["main_net_in"], reverse=True)
     top_in = rows_in[:topn]
-    rows_out = _fetch("-1")
-    rows_out.sort(key=lambda x: (x["main_net_in"] if x["main_net_in"] is not None else 1e30))
+    rows_out = [x for x in rows if x.get("main_net_in") is not None]
+    rows_out.sort(key=lambda x: x["main_net_in"])
     top_out = rows_out[:topn]
-    return top_in, top_out, (SOURCE_EM if (top_in or top_out) else "东方财富接口暂不可用（沙箱出口受限，请在本机运行）")
+    return top_in, top_out, (src if (top_in or top_out) else "东方财富个股资金流排行接口暂不可用")
 
 
 def compute_hotspots(sw_list, topn=5):
@@ -945,7 +1336,7 @@ def write_html(path, result):
 # 主流程
 # ---------------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser(description="A股收盘数据获取 + 报告生成脚本（东方财富/腾讯，收盘后口径）")
+    ap = argparse.ArgumentParser(description="A股收盘数据获取 + 报告生成脚本（AKShare + 东方财富/腾讯，收盘后口径）")
     ap.add_argument("--date", help="数据日期 YYYY-MM-DD（默认取最近交易日）")
     ap.add_argument("--fmt", default="html",
                     help="输出格式（逗号分隔，可多选）：json / md / csv / html（默认仅 html）")
@@ -962,8 +1353,21 @@ def main():
     style_src = idx_src  # 风格指数与主要指数同源同请求
     print(f"[+] 指数 {len(indices)} 条 + 风格 {len(style_idx)} 条（{idx_src}）")
 
-    sw_list, sw_src = fetch_sw_industry()
-    print(f"[+] 申万一级行业: {len(sw_list)}/31 条（{sw_src}）")
+    sw_mapping, sw_mapping_src = fetch_sw_mapping()
+    print(f"[+] 申万一级映射: {len((sw_mapping or {}).get('by_code', {}))}/31 条（{sw_mapping_src}）")
+
+    stock_to_industry, stock_map_src = fetch_sw_stock_map()
+    print(f"[+] 申万成分股映射: {len(stock_to_industry)} 条股票映射（{stock_map_src}）")
+
+    sw_spot, sw_spot_src = fetch_sw_index_spot()
+    print(f"[+] 申万一级指数: {len(sw_spot)}/31 条（{sw_spot_src}）")
+
+    stock_rows, stock_rows_src = fetch_all_stock_fundflow_rank("今日", stock_codes=stock_to_industry.keys())
+    print(f"[+] 个股资金流全市场: {len(stock_rows)} 条（{stock_rows_src}）")
+
+    sw_list = build_sw_industry(sw_spot, stock_rows, sw_mapping, stock_to_industry)
+    sw_src = f"{sw_spot_src} + {stock_rows_src}"
+    print(f"[+] 申万一级行业聚合: {len(sw_list)}/31 条（{sw_src}）")
 
     nb, nb_src = fetch_northbound(sh_amt, sz_amt)
     print(f"[+] 北向资金: {'可用' if nb['available'] else '暂不可用'}（{nb_src}）")
@@ -971,7 +1375,7 @@ def main():
     style_proxy = compute_style_proxy(sw_list)
     print(f"[+] 风格代理: {len(style_proxy)} 条主题（金融防御/医药景气/科技成长/周期资源）")
 
-    top_in, top_out, stock_src = fetch_stock_fundflow_top(args.topn)
+    top_in, top_out, stock_src = fetch_stock_fundflow_top(args.topn, stock_rows=stock_rows, stock_source=stock_rows_src)
     print(f"[+] 个股资金流 TOP: 净流入 {len(top_in)} / 净流出 {len(top_out)} 条（{stock_src}）")
 
     hotspots = compute_hotspots(sw_list)
@@ -1003,7 +1407,7 @@ def main():
         hotspots = over.get("hotspots") or compute_hotspots(sw_list)
         print(f"[+] --merge {args.merge}：补全 申万 {len(sw_list)}/31、北向 {'可用' if nb.get('available') else '无'}、个股TOP {len(top_in)}/{len(top_out)}")
 
-    overall_source = SOURCE_EM if (sw_list or nb["available"] or top_in) else "腾讯gtimg(指数回退)+东方财富(受限)"
+    overall_source = SOURCE_SW if (sw_list or nb["available"] or top_in) else "腾讯gtimg(指数回退)+AKShare/东方财富(受限)"
     if merged:
         overall_source += "（主源受限，部分模块由外部数据补全）"
 
