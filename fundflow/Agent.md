@@ -1,6 +1,6 @@
 # Agent.md — fundflow 模块
 
-A 股收盘资金流数据抓取 + 静态网页报告生成模块。独立于仓库根目录的港股页面模板（build.py / data.json / index.html），只关注资金流动跟踪。
+A 股收盘资金流数据抓取 + 静态网页报告生成模块。当前采用“数据生产 / UI 渲染 / 主脚本编排”三段式结构，独立于仓库根目录的港股页面模板（build.py / data.json / index.html），只关注资金流动跟踪。
 
 ## 一、项目简介
 
@@ -24,7 +24,9 @@ A 股收盘资金流数据抓取 + 静态网页报告生成模块。独立于仓
 
 ```
 fundflow/
-├── ashare_close_fetcher.py   # 抓取 + 报告生成脚本（零第三方依赖，仅标准库）
+├── funflow_data_fetcher.py   # 数据抓取 / 聚合 / JSON, CSV 产出
+├── funflow_ui_renderer.py    # 基于 JSON 中间产物渲染纯静态 HTML
+├── fundflow_main.py          # 主脚本：先生产数据，再渲染 HTML
 ├── report.css                # HTML 报告样式源（深色金融终端风、涨红跌绿），生成时内联进 HTML
 └── Agent.md                  # 本文件
 ```
@@ -33,38 +35,41 @@ fundflow/
 
 ```
 build/
-├── ashare_close.html          # 默认输出：静态网页报告（数据内联、无 <script>）
-├── ashare_close.json          # 机器可读（--fmt json）
-├── ashare_close.md            # Markdown（--fmt md）
-└── ashare_close_industry.csv  # 申万行业表（--fmt csv）
+├── funflow.json               # 主脚本生成的中间产物（UI 输入）
+├── funflow.html               # 静态网页报告（数据内联、无 <script>）
+└── funflow_industry.csv       # 申万行业表（可选）
 ```
 
 ## 三、构建 / 运行命令
 
 ```bash
 cd fundflow
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r ../requirements.txt
+../.venv/bin/python -m pip install -r ../requirements.txt
 
-# 1) 日常构建（默认）：取最近交易日，仅生成 HTML
-python ashare_close_fetcher.py
-# → 产物：build/ashare_close.html（覆盖前一天）
+# 1) 日常构建（默认）：主脚本先产出 JSON，再渲染 HTML
+../.venv/bin/python fundflow_main.py
+# → 产物：build/funflow.json + build/funflow.html
 
 # 2) 指定数据日期
-python ashare_close_fetcher.py --date 2026-08-25
+../.venv/bin/python fundflow_main.py --date 2026-08-25
 
-# 3) 多格式输出（逗号组合：json / md / csv / html）
-python ashare_close_fetcher.py --fmt json,md,html
+# 3) 多格式输出（逗号组合：json / csv / html）
+../.venv/bin/python fundflow_main.py --fmt json,csv,html
 
 # 4) 自定义输出目录
-python ashare_close_fetcher.py --fmt csv --out /tmp/x
+../.venv/bin/python fundflow_main.py --fmt csv --out /tmp/x
 
 # 5) 个股资金流 TOP 数量（默认 10）
-python ashare_close_fetcher.py --topn 20
+../.venv/bin/python fundflow_main.py --topn 20
 
-# 6) EM 被限流时，用外部/MCP 数据补全缺失模块（申万/个股TOP等）
-python ashare_close_fetcher.py --merge /tmp/merge.json
+# 6) 仅跑数据生产层
+../.venv/bin/python funflow_data_fetcher.py --fmt json,csv
+
+# 7) 基于已生成 JSON 单独做 HTML 渲染
+../.venv/bin/python funflow_ui_renderer.py --input ../build/funflow.json --output ../build/funflow.html
+
+# 8) EM 被限流时，用外部/MCP 数据补全缺失模块（申万/个股TOP等）
+../.venv/bin/python fundflow_main.py --merge /tmp/merge.json
 # merge.json 结构见文末
 ```
 
@@ -74,9 +79,9 @@ python ashare_close_fetcher.py --merge /tmp/merge.json
 - 个股资金流 TOP 直接复用全市场资金流排行结果，不再为 TOP 单独发请求。
 
 **关键点**：
-- 文件名**固定无日期**，每天运行覆盖前一天；打开/刷新 `build/ashare_close.html` 即见最新报告。
-- 默认 `--fmt html`；`--fmt` 未传任何有效值时不输出任何文件（会提示）。
-- 偶发接口超时调优：`EM_TIMEOUT=8 EM_RETRIES=2 python3 ashare_close_fetcher.py`
+- 文件名**固定无日期**，每天运行覆盖前一天；打开/刷新 `build/funflow.html` 即见最新报告。
+- 主脚本默认 `--fmt html`，但会额外保留 `build/funflow.json` 作为 UI 渲染中间产物。
+- 偶发接口超时调优：`EM_TIMEOUT=8 EM_RETRIES=2 ../.venv/bin/python fundflow_main.py`
 - `report.css` 必须与脚本同目录（脚本按自身位置加载并内联），移动时两者一起搬。
 
 ## 四、口径与约束（Agent 必须遵守）
@@ -92,17 +97,17 @@ python ashare_close_fetcher.py --merge /tmp/merge.json
 ## 五、每日例行（给 Agent / 自动化）
 
 1. 判断当日是否为交易日（脚本 `detect_trade_date()` 已处理，也可直接 `--date` 指定）。
-2. 运行 `python3 ashare_close_fetcher.py`（收盘 15:00 后）。
-3. 校验输出：`build/ashare_close.html` 生成成功、头部数据日期正确、无「数据暂缺」大面积出现（本机网络正常时）。
+2. 运行 `../.venv/bin/python fundflow_main.py`（收盘 15:00 后）。
+3. 校验输出：`build/funflow.json` 与 `build/funflow.html` 生成成功、头部数据日期正确、无「数据暂缺」大面积出现（本机网络正常时）。
 4. 若 AKShare 相关接口暂不可用，优先检查 `.venv` / `requirements.txt` / 外网访问与 `fundflow/.cache/` 是否有效，再考虑 `--merge` 补全。
-5. 如需对外分享，直接给 `build/ashare_close.html` 文件本身（单文件自包含）。
+5. 如需对外分享，直接给 `build/funflow.html` 文件本身（单文件自包含）。
 
 ## 六、自动部署（GitHub Actions + Pages）
 
 `.github/workflows/ashare-report.yml`：每个交易日 15:45（北京时间）自动运行脚本并部署 GitHub Pages。
 
 - 触发：`schedule`（周一至五 07:45 UTC）+ `workflow_dispatch`（手动）
-- 流程：`python3 fundflow/ashare_close_fetcher.py`（默认仅 HTML）→ `build/ashare_close.html` 复制为站点根 `index.html` → upload-pages-artifact → deploy-pages
+- 流程：`python3 fundflow/fundflow_main.py`（默认 JSON 中间产物 + HTML）→ `build/funflow.html` 复制为站点根 `index.html` → upload-pages-artifact → deploy-pages
 - 一次性配置：仓库 **Settings → Pages → Source 选「GitHub Actions」**
 - 站点：`https://<owner>.github.io/<repo>/`（根路径即最新报告）
 
