@@ -6,7 +6,7 @@ stocktrend UI 渲染脚本
 
 职责：
   1. 读取 stocktrend 数据收集脚本生成的 JSON 中间产物
-  2. 基于 stocktrend/index.html 的现有视觉模板生成两个静态页面
+  2. 基于独立 CSS 模板生成两个静态页面
 
 默认产物：
   - build/stocktrend_ashare.html
@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 from typing import Any, Dict, List, Optional
 
 
@@ -35,13 +34,10 @@ def default_build_dir() -> str:
 
 def _load_css() -> str:
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(script_dir, "build.py")
+    path = os.path.join(script_dir, "stocktrend_style.css")
     try:
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
-        match = re.search(r'CSS\s*=\s*"""(.*?)"""', text, re.S)
-        if match:
-            return match.group(1)
+        with open(path, encoding="utf-8") as file:
+            return file.read()
     except Exception:
         pass
     return ""

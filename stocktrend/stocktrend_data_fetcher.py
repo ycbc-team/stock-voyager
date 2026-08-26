@@ -33,12 +33,11 @@ from common.market_data import detect_trade_date
 from common.market_data import get_akshare
 from common.market_data import http_get
 from common.market_data import load_or_fetch_stock_fundflow_build
-from common.market_data import to_float
-from common.storage import build_path
 from common.storage import default_build_dir
 from common.storage import load_build_json
 from common.storage import save_build_json
 from common.storage import write_json
+from stocktrend.stocktrend_static_data import HK_BASE_DATA
 
 
 ak = get_akshare()
@@ -127,9 +126,7 @@ def _safe_ak_call(label: str, fn: Callable[..., Any], *args: Any, **kwargs: Any)
 
 
 def _load_hk_base_data() -> Dict[str, Any]:
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.json")
-    with open(path, encoding="utf-8") as file:
-        return json.load(file)
+    return HK_BASE_DATA
 
 
 A_SHARE_SECTORS = [
