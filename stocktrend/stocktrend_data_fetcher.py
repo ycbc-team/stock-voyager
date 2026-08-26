@@ -229,6 +229,26 @@ def _find_metric(row: Dict[str, Any], keywords: List[str]) -> Optional[float]:
     return None
 
 
+def _extract_year_from_row(row: Dict[str, Any], candidate_keys: List[str]) -> Optional[int]:
+    for key in candidate_keys:
+        year = _extract_report_year(row.get(key))
+        if year is not None:
+            return year
+    for value in row.values():
+        year = _extract_report_year(value)
+        if year is not None:
+            return year
+    return None
+
+
+def _find_metric_by_any_keywords(row: Dict[str, Any], keyword_groups: List[List[str]]) -> Optional[float]:
+    for keywords in keyword_groups:
+        value = _find_metric(row, keywords)
+        if value is not None:
+            return value
+    return None
+
+
 def _fetch_spot_rows_direct(codes: List[str], market: str) -> List[Dict[str, Any]]:
     secids = []
     for code in codes:
@@ -434,6 +454,89 @@ def _fetch_hk_financial_indicator(code: str, trade_date: str) -> Dict[str, Any]:
     return payload
 
 
+def _fetch_hk_financial_analysis(code: str, trade_date: str) -> Dict[str, Any]:
+    filename = f"stocktrend_hk_financial_analysis_{code}_{trade_date}.json"
+    cached = load_build_json(filename)
+    if cached is not None:
+        return cached
+
+    payload: Dict[str, Any] = {}
+    analysis_fn = getattr(ak, "stock_financial_hk_analysis_indicator_em", None)
+    if analysis_fn is not None:
+        df = _safe_ak_call(f"{code} 港股财务分析", analysis_fn, symbol=code)
+        if df is not None and not df.empty:
+            row = df.iloc[-1].to_dict()
+            payload = {
+                "roe": _find_metric_by_any_keywords(row, [["净资产收益率"], ["股东权益回报率"]]),
+                "margin": _find_metric_by_any_keywords(row, [["销售毛利率"], ["毛利率"]]),
+                "liab": _find_metric_by_any_keywords(row, [["资产负债率"], ["负债率"]]),
+            }
+
+    save_build_json(filename, payload)
+    return payload
+
+
+def _fetch_hk_dividends(code: str, trade_date: str) -> Dict[str, Any]:
+    filename = f"stocktrend_hk_dividend_{code}_{trade_date}.json"
+    cached = load_build_json(filename)
+    if cached is not None:
+        return cached
+
+    payload = {"div5": [], "div_years": []}
+    dividend_fn = getattr(ak, "stock_hk_dividend_payout_em", None)
+    if dividend_fn is not None:
+        df = _safe_ak_call(f"{code} 港股分红派息", dividend_fn, symbol=code)
+        if df is not None and not df.empty:
+            latest_by_year: Dict[int, Dict[str, Any]] = {}
+            for row in df.to_dict("records"):
+                year = _extract_year_from_row(row, ["报告期", "派息年度", "年度", "财年", "财政年度"])
+                if year is None:
+                    continue
+                latest_by_year[year] = row
+
+            years = sorted(latest_by_year.keys())[-5:]
+            divs: List[Optional[float]] = []
+            for year in years:
+                row = latest_by_year[year]
+                divs.append(
+                    _find_metric_by_any_keywords(
+                        row,
+                        [["每股股息"], ["每股派息"], ["派息", "每股"], ["股息"]],
+                    )
+                )
+            payload = {"div5": divs, "div_years": years}
+
+    save_build_json(filename, payload)
+    return payload
+
+
+def _fetch_hk_southbound(code: str, trade_date: str) -> Dict[str, Any]:
+    filename = f"stocktrend_hk_southbound_{code}_{trade_date}.json"
+    cached = load_build_json(filename)
+    if cached is not None:
+        return cached
+
+    payload: Dict[str, Any] = {}
+    south_fn = getattr(ak, "stock_hsgt_individual_em", None)
+    if south_fn is not None:
+        df = _safe_ak_call(f"{code} 港股通持股", south_fn, stock=code)
+        if df is not None and not df.empty:
+            row = df.iloc[-1].to_dict()
+            payload = {
+                "south_shares": _find_metric_by_any_keywords(
+                    row,
+                    [["持股数量"], ["持股数"], ["股数"]],
+                ),
+                "south_pct": _find_metric_by_any_keywords(
+                    row,
+                    [["占总股本", "比例"], ["占总股本"], ["占已发行股份", "比例"], ["占比"]],
+                ),
+            }
+
+    save_build_json(filename, payload)
+    return payload
+
+
 def _fetch_ashare_financial_snapshot(code: str, trade_date: str) -> Dict[str, Any]:
     filename = f"stocktrend_ashare_financial_{code}_{trade_date}.json"
     cached = load_build_json(filename)
@@ -515,6 +618,23 @@ def _build_generic_texts(name: str, sector_key: str, pe: Optional[float], pos: O
         "trend": f"{name} 处于 {pos_text} 区间，建议结合估值位置与成交活跃度做分批观察。",
         "capital": f"{flow_text}；{north_text}。",
         "risks": SECTOR_RISK_TEXT[sector_key],
+    }
+
+
+def _build_generic_hk_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], div: Optional[float], south_pct: Optional[float]) -> Dict[str, Any]:
+    signal = _build_signal(pos, pe, div, None)
+    suggest = "可分批关注" if signal == 0 else "持有观察" if signal == 1 else "谨慎观望"
+    pe_text = "亏损或暂缺" if pe is None or pe <= 0 else f"PE {pe:.1f}"
+    pos_text = "52周位置暂缺" if pos is None else f"52周分位 {pos:.0f}%"
+    south_text = "南向持股暂缺" if south_pct is None else f"南向持股占比 {_fmt_pct(south_pct)}"
+    div_text = "股息率暂缺" if div is None else f"股息率 {_fmt_pct(div)}"
+    return {
+        "signal": signal,
+        "suggest": suggest,
+        "summary": f"{name} 当前以 {pe_text}、{pos_text} 为核心跟踪锚点，{div_text}，{south_text}。",
+        "trend": f"{name} 处于 {pos_text} 区间，建议结合估值位置、区间涨跌与南向持股变化做跟踪。",
+        "capital": f"{south_text}；{div_text}。",
+        "risks": SECTOR_RISK_TEXT.get(sector_key, ["行业景气波动", "估值回撤风险", "市场风格切换风险"]),
     }
 
 
@@ -628,11 +748,17 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
         hist_last = _latest_hist_row(hist_rows)
         prev_close = _prev_close_from_hist(hist_rows)
         fin = _fetch_hk_financial_indicator(code, trade_date)
-        signal = _build_signal(hist_stats.get("pos"), fin.get("pe"), fin.get("div"), None)
-
-        capital = base.get("capital") or ""
-        if base.get("south") is not None:
-            capital = f"南向持股 {_fmt_pct(_to_float(base.get('south')))}；成交额 {_fmt_yi(_to_float(spot.get('成交额')))}。"
+        fin_analysis = _fetch_hk_financial_analysis(code, trade_date)
+        dividends = _fetch_hk_dividends(code, trade_date)
+        southbound = _fetch_hk_southbound(code, trade_date)
+        generated = _build_generic_hk_texts(
+            base["zh"],
+            base["sector"],
+            fin.get("pe"),
+            hist_stats.get("pos"),
+            fin.get("div"),
+            southbound.get("south_pct"),
+        )
 
         stocks.append(
             {
@@ -642,16 +768,16 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
                 "price": _to_float(hist_last.get("收盘")) or _to_float(spot.get("最新价")),
                 "chg": _to_float(hist_last.get("涨跌幅")) if _to_float(hist_last.get("涨跌幅")) is not None else _to_float(spot.get("涨跌幅")),
                 "change": _to_float(hist_last.get("涨跌额")) if _to_float(hist_last.get("涨跌额")) is not None else _to_float(spot.get("涨跌额")),
-                "pe": fin.get("pe") if fin.get("pe") is not None else _to_float(base.get("pe")),
-                "pb": fin.get("pb") if fin.get("pb") is not None else _to_float(base.get("pb")),
-                "div": fin.get("div") if fin.get("div") is not None else _to_float(base.get("div")),
+                "pe": fin.get("pe"),
+                "pb": fin.get("pb"),
+                "div": fin.get("div"),
                 "mkt_raw": fin.get("mkt_raw"),
-                "mkt": _fmt_market_cap(fin.get("mkt_raw")) if fin.get("mkt_raw") is not None else base.get("mkt"),
+                "mkt": _fmt_market_cap(fin.get("mkt_raw")) if fin.get("mkt_raw") is not None else None,
                 "open": _to_float(hist_last.get("开盘")) or _to_float(spot.get("今开")),
                 "prev": prev_close if prev_close is not None else _to_float(spot.get("昨收")),
                 "amount_raw": _to_float(hist_last.get("成交额")) if _to_float(hist_last.get("成交额")) is not None else _to_float(spot.get("成交额")),
                 "amount": _fmt_yi(_to_float(hist_last.get("成交额")) if _to_float(hist_last.get("成交额")) is not None else _to_float(spot.get("成交额"))),
-                "turn": _to_float(hist_last.get("换手率")) if _to_float(hist_last.get("换手率")) is not None else (_to_float(spot.get("换手率")) if _to_float(spot.get("换手率")) is not None else _to_float(base.get("turn"))),
+                "turn": _to_float(hist_last.get("换手率")) if _to_float(hist_last.get("换手率")) is not None else _to_float(spot.get("换手率")),
                 "w52l": hist_stats.get("w52l"),
                 "w52h": hist_stats.get("w52h"),
                 "pos": hist_stats.get("pos"),
@@ -659,12 +785,20 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
                 "chg20": hist_stats.get("chg20"),
                 "chg60": hist_stats.get("chg60"),
                 "ytd": hist_stats.get("ytd"),
-                "roe": fin.get("roe") if fin.get("roe") is not None else _to_float(base.get("roe")),
-                "signal": signal,
-                "capital": capital,
-                "trend": base.get("trend") or f"近 5/20/60 日涨跌分别为 {_fmt_signed_pct(hist_stats.get('chg5'))} / {_fmt_signed_pct(hist_stats.get('chg20'))} / {_fmt_signed_pct(hist_stats.get('chg60'))}。",
-                "suggest": base.get("suggest") or ("可分批关注" if signal == 0 else "持有观察" if signal == 1 else "谨慎观望"),
-                "summary": base.get("summary") or f"{base['zh']} 当前位于 52 周分位 {hist_stats.get('pos') or '—'}%，适合结合南向持股与估值变化做跟踪。",
+                "roe": fin_analysis.get("roe") if fin_analysis.get("roe") is not None else fin.get("roe"),
+                "margin": fin_analysis.get("margin"),
+                "liab": fin_analysis.get("liab"),
+                "div5": dividends.get("div5") or [],
+                "div_years": dividends.get("div_years") or [],
+                "south": southbound.get("south_pct"),
+                "south_pct": southbound.get("south_pct"),
+                "south_shares": southbound.get("south_shares"),
+                "signal": generated["signal"],
+                "capital": generated["capital"],
+                "trend": generated["trend"],
+                "suggest": generated["suggest"],
+                "summary": generated["summary"],
+                "risks": base.get("risks") or generated["risks"],
             }
         )
 
@@ -674,9 +808,10 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
             "market_code": "hk",
             "tag": f"收盘快照 · {trade_date}",
             "date": f"行情：{trade_date} 收盘快照（AKShare / 东方财富）｜ 港股惯例：涨红跌绿",
-            "databadge": "⚠️ 数据口径：行情为当日收盘快照；港股估值与股息率优先取东方财富港股核心指标；长期说明字段沿用 stocktrend 模板配置。",
-            "modal_databadge": "⚠️ 本页为静态收盘快照：价格、涨跌、成交额对应收盘口径；PE / PB / 股息率优先来自东方财富港股核心指标。",
-            "footer": f"{meta.get('title', '港股核心个股走势分析')} · {trade_date} · 数据源：AKShare / 东方财富",
+            "databadge": "⚠️ 数据口径：行情为当日收盘快照；PE / PB / 股息率优先取东方财富港股核心指标；ROE / 毛利率 / 资产负债率、近 5 年分红、南向持股优先走实时公开接口，缺失则显示“—”。",
+            "modal_databadge": "⚠️ 本页为静态模板 + 实时数据：价格、涨跌、成交额对应收盘口径；PE / PB / 股息率、财务分析、分红派息、南向持股均优先取公开接口实时结果。",
+            "disclaimer": "⚠️ 免责声明：页面仅做公开数据整理与展示，不构成投资建议。行业分类、组合分组与风险提示为静态模板配置；价格、估值、财务、分红、南向持股为实时公开数据。",
+            "footer": f"{meta.get('title', '港股核心个股走势分析')} · {trade_date} · 数据源：AKShare / 东方财富 / 港交所公开披露链路",
             "snap_iso": trade_date,
             "currency_unit": "港元",
             "money_unit": "亿港元",
@@ -684,6 +819,8 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
             "holding_label": "南向持股",
             "holding_pct_label": "南向持股比例",
             "show_roster": True,
+            "roster_title": "ROE 分层观察名单（港股）",
+            "roster_note": "若公开财务分析可得，则按最近可取 ROE 分层展示；缺失则不强行补值。",
         }
     )
     return {"meta": meta, "sectors": base_data["sectors"], "combos": base_data["combos"], "stocks": stocks}
