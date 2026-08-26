@@ -14,10 +14,14 @@ import datetime
 import json
 import os
 
-from funflow_data_fetcher import default_build_dir
-
 
 _WEEK = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def default_build_dir():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(script_dir)
+    return os.path.join(root_dir, "build")
 
 
 def _weekday_cn(date_str):
@@ -106,6 +110,98 @@ def _empty_body(msg):
     )
 
 
+def product_source_text(source):
+    parts = []
+    if "AKShare" in source:
+        parts.append("AKShare")
+    if "东方财富" in source:
+        parts.append("东方财富")
+    if "腾讯" in source or "gtimg" in source:
+        parts.append("腾讯财经（回退）")
+    if not parts:
+        return source
+    return "、".join(parts) + " 等公开数据"
+
+
+def build_market_views(result):
+    indices = {x["name"]: x for x in result.get("indices", [])}
+    sw = result.get("sw_industry") or []
+    nb = result.get("northbound") or {}
+    style_proxy = result.get("style_proxy") or []
+
+    sh = indices.get("上证指数")
+    sz = indices.get("深证成指")
+    cyb = indices.get("创业板指")
+    up_n = sum(1 for x in sw if (x.get("pct") or 0) > 0)
+    dn_n = sum(1 for x in sw if (x.get("pct") or 0) < 0)
+    breadth_desc = f"行业上涨 {up_n} 个，下跌 {dn_n} 个" if sw else "行业广度数据暂缺"
+    index_desc = "、".join(
+        f"{name}{x['pct']:+.2f}%"
+        for name, x in (("上证", sh), ("深成", sz), ("创业板", cyb))
+        if x and x.get("pct") is not None
+    ) or "核心指数数据暂缺"
+    breadth_rating = "r1" if up_n > dn_n else ("r3" if dn_n > up_n else "r2")
+    breadth_label = "偏强" if up_n > dn_n else ("偏弱" if dn_n > up_n else "均衡")
+
+    net_vals = [x["main_net_in"] for x in sw if x.get("main_net_in") is not None]
+    total_net = sum(net_vals) / 1e8 if net_vals else None
+    top_in = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"], reverse=True)[:2]
+    top_out = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"])[:2]
+    in_desc = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in top_in) or "暂无明显流入主线"
+    out_desc = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in top_out) or "暂无明显流出主线"
+    flow_rating = "r1" if (total_net or 0) > 0 else ("r3" if (total_net or 0) < 0 else "r2")
+    flow_label = "净流入" if (total_net or 0) > 0 else ("净流出" if (total_net or 0) < 0 else "分化")
+    flow_brief = f"申万 31 行业合计 {total_net:+.1f} 亿" if total_net is not None else "行业主力净额暂缺"
+
+    lead_style = None
+    if style_proxy:
+        lead_style = sorted(style_proxy, key=lambda x: x.get("pct") or 0, reverse=True)[0]
+    nb_ratio = nb.get("turnover_ratio")
+    nb_desc = f'北向成交占两市 {nb_ratio * 100:.2f}%' if nb_ratio else "北向占比数据暂缺"
+    style_desc = f'领涨主题：{lead_style["name"]} {lead_style["pct"]:+.2f}%' if lead_style else "主题风格数据暂缺"
+    style_rating = "r1" if lead_style and (lead_style.get("pct") or 0) > 0 else ("r3" if lead_style and (lead_style.get("pct") or 0) < 0 else "r2")
+    style_label = "风格偏多" if lead_style and (lead_style.get("pct") or 0) > 0 else ("风格承压" if lead_style and (lead_style.get("pct") or 0) < 0 else "风格中性")
+
+    cards = [
+        (
+            "v1",
+            "市场概览",
+            breadth_label,
+            breadth_rating,
+            f"<span class=\"k\">{index_desc}</span><br>{breadth_desc}",
+            "聚焦核心指数与行业涨跌家数，适合先看整体强弱。",
+        ),
+        (
+            "v2",
+            "资金主线",
+            flow_label,
+            flow_rating,
+            f"<span class=\"u\">流入：</span>{in_desc}<br><span class=\"d\">流出：</span>{out_desc}",
+            flow_brief,
+        ),
+        (
+            "v3",
+            "风格偏好",
+            style_label,
+            style_rating,
+            f"{style_desc}<br>{nb_desc}",
+            "结合主题代理与北向成交占比，看盘后风格偏向。",
+        ),
+    ]
+
+    html = ['    <div class="views">\n']
+    for cls, title, rating_text, rating_cls, line_html, footer in cards:
+        html.append(
+            f'      <div class="view {cls}">\n'
+            f'        <div class="vh"><div class="vn">{title}</div><span class="rating {rating_cls}">{rating_text}</span></div>\n'
+            f'        <div class="vl">{line_html}</div>\n'
+            f'        <div class="vr">{footer}</div>\n'
+            f'      </div>\n'
+        )
+    html.append("    </div>\n")
+    return "".join(html)
+
+
 def load_result(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
@@ -121,7 +217,9 @@ def write_html(path, result):
     S.append(
         f'<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n'
         f'<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f'<title>A股收盘 · 资金流向监控 · {d}</title>\n<style>\n{css}\n</style>\n'
+        f'<meta name="description" content="stock-voyager A股资金流日报，覆盖主要指数、行业资金流、北向资金、风格雷达与热点异动。">\n'
+        f'<meta name="color-scheme" content="dark">\n'
+        f'<title>stock-voyager · A股资金流日报 · {d}</title>\n<style>\n{css}\n</style>\n'
         f'</head>\n<body>\n<div class="wrap">\n'
     )
 
@@ -130,17 +228,19 @@ def write_html(path, result):
     <div class="hdr-l">
       <div class="logo"><svg viewBox="0 0 24 24" fill="none"><path d="M4 17l5-6 4 3 7-9" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 5h5v5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <div>
-        <h1>A股收盘 · <em>资金流向监控</em></h1>
-        <div class="sub">CLOSE SNAPSHOT · CAPITAL FLOW · STYLE RADAR · NORTHBOUND</div>
+        <h1>stock-voyager · <em>A股资金流日报</em></h1>
+        <div class="sub">收盘快照 · 资金主线 · 风格雷达 · 北向跟踪</div>
       </div>
     </div>
     <div class="hdr-r">
       <span class="live-badge"><span class="dot"></span>数据日期 {d}（{wd}）· 收盘</span>
-      <div class="src-line">生成于 <b>{result["generated_at"]}</b> ｜ 来源：{result["source"]}</div>
+      <div class="src-line">更新于 <b>{result["generated_at"]}</b> ｜ 数据源：{product_source_text(result["source"])}</div>
     </div>
   </div>
 '''
     )
+
+    S.append(_panel("今日解读", "盘后速览", build_market_views(result)))
 
     idx_rows = []
     for x in result["indices"]:
@@ -167,8 +267,8 @@ def write_html(path, result):
             '      </thead>\n      <tbody>\n' + "\n".join(idx_rows) + '\n      </tbody>\n    </table>\n'
         )
     else:
-        body = _empty_body("主要指数数据暂不可用，请先生成 JSON 中间产物。")
-    S.append(_panel("主要指数收盘点位 MARKET INDICES", f"{d} 收盘 · 涨红跌绿", body))
+        body = _empty_body("主要指数模块暂未成功生成，请稍后刷新报告。")
+    S.append(_panel("主要指数", f"{d} 收盘 · 涨红跌绿", body))
 
     idx_by_name = {x["name"]: x for x in result["indices"]}
 
@@ -232,7 +332,7 @@ def write_html(path, result):
             '      <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L4.5 13.5H11L9.5 22 19 9.5h-6.5L13 2z" fill="var(--cyan)" opacity=".85"/></svg>\n      今日资金主线\n'
             '    </div><div class="ml-item"><span class="arrow">申万行业数据暂缺，无法构造资金主线。</span></div></div>\n'
         )
-    S.append(_panel("核心市场 KPI", "收盘口径", kpi_html + ml))
+    S.append(_panel("核心市场总览", "收盘口径", kpi_html + ml))
 
     if sw:
         in_sum = sum(h_yi(x["main_net_in"]) for x in sw if x.get("main_net_in") and x["main_net_in"] > 0)
@@ -252,7 +352,7 @@ def write_html(path, result):
         )
     else:
         body = _empty_body("申万行业数据暂缺，无法汇总主力资金分布。")
-    S.append(_panel("全市场主力资金分布 MAIN CAPITAL DISTRIBUTION", "按申万31行业主力净额汇总", body))
+    S.append(_panel("全市场主力资金分布", "按申万31行业汇总", body))
 
     if sw:
         cells = []
@@ -283,7 +383,7 @@ def write_html(path, result):
         body = heat + flow
     else:
         body = _empty_body("申万行业数据暂缺，无法绘制热力图与资金流条形。")
-    S.append(_panel("申万一级行业 · 涨跌热力图 & 资金流", "31 行业 · 涨红跌绿", body))
+    S.append(_panel("申万一级行业热力图", "31 行业 · 涨红跌绿", body))
 
     ti, to = result["stock_top_in"], result["stock_top_out"]
     if ti or to:
@@ -312,7 +412,7 @@ def write_html(path, result):
         )
     else:
         body = _empty_body("个股资金流数据暂缺。")
-    S.append(_panel("个股资金流 TOP STOCK RANK", "主力净额 · 收盘", body))
+    S.append(_panel("个股资金流排行", "主力净额 · 收盘", body))
 
     si = result["style_indices"]
     sp = result["style_proxy"]
@@ -338,7 +438,7 @@ def write_html(path, result):
         body = "\n".join(parts)
     else:
         body = _empty_body("风格指数数据暂缺。")
-    S.append(_panel("风格指数 & 主题代理 STYLE RADAR", "国证风格 + 主题聚合", body))
+    S.append(_panel("风格与主题", "国证风格 + 主题聚合", body))
 
     if nb.get("available"):
         t_r = f'{nb["turnover_ratio"] * 100:.2f}%' if nb.get("turnover_ratio") else "—"
@@ -353,7 +453,7 @@ def write_html(path, result):
         )
     else:
         body = _empty_body(nb.get("source", "北向数据暂缺") + "（净买入不披露，不编造）。")
-    S.append(_panel("北向资金 NORTHBOUND TRACKER", "仅成交额 / 占比", body))
+    S.append(_panel("北向资金跟踪", "仅成交额 / 占比", body))
 
     hs = result.get("hotspots") or {}
     hot = hs.get("hot", [])
@@ -369,15 +469,16 @@ def write_html(path, result):
         body = '    <div class="hot">\n' + hcol("今日热点（涨幅前）", hot, "up-b") + hcol("今日异动（跌幅前）", weak, "down-b") + "    </div>\n"
     else:
         body = _empty_body("热点/异动板块数据暂缺。")
-    S.append(_panel("热点 & 异动板块 HOTSPOTS", "申万行业涨跌 TOP", body))
+    S.append(_panel("热点与异动板块", "申万行业涨跌 TOP", body))
 
     S.append(
         f'''  <div class="foot">
-    <b>数据日期</b>：{d}（{wd}，收盘后口径）　｜　<b>生成时间</b>：{result["generated_at"]}<br>
-    <b>数据来源</b>：{result["source"]}；北向成交额为公开披露项，<b>净买入不披露、不编造</b>。<br>
-    <b>口径说明</b>：涨红跌绿（A股惯例）；成交额/净流入单位为元，展示折算为亿/万亿；行业与个股口径以东方财富/腾讯自选股收盘数据为准。
+    <b>数据日期</b>：{d}（{wd}，收盘后口径）　｜　<b>更新时间</b>：{result["generated_at"]}<br>
+    <b>数据来源</b>：{product_source_text(result["source"])}；北向成交额为公开披露项，<b>净买入不披露、不编造</b>。<br>
+    <b>明细来源</b>：{result["source"]}<br>
+    <b>口径说明</b>：涨红跌绿（A股惯例）；成交额/净流入单位为元，展示折算为亿/万亿；行业与个股口径以公开行情数据为准。
   </div>
-  <div class="disclaimer">本报告由 <b>funflow_ui_renderer.py</b> 自动生成 · 仅供研究参考，不构成投资建议</div>
+  <div class="disclaimer">本报告由 <a href="https://github.com/ycbc-team/stock-voyager" target="_blank" rel="noopener noreferrer" style="color:var(--amber);font-weight:600;text-decoration:none">stock-voyager</a> 生成 · 仅供研究参考，不构成投资建议</div>
 '''
     )
     S.append("</div>\n</body>\n</html>\n")
