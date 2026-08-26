@@ -13,6 +13,15 @@ import argparse
 import datetime
 import json
 import os
+import sys
+
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from common.site_navigation import render_site_nav
+from common.site_navigation import site_nav_css
 
 
 _WEEK = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -219,8 +228,8 @@ def write_html(path, result):
         f'<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
         f'<meta name="description" content="stock-voyager A股资金流日报，覆盖主要指数、行业资金流、北向资金、风格雷达与热点异动。">\n'
         f'<meta name="color-scheme" content="dark">\n'
-        f'<title>stock-voyager · A股资金流日报 · {d}</title>\n<style>\n{css}\n</style>\n'
-        f'</head>\n<body>\n<div class="wrap">\n'
+        f'<title>stock-voyager · A股资金流日报 · {d}</title>\n<style>\n{css}\n{site_nav_css()}\n</style>\n'
+        f'</head>\n<body class="site-shell-body">\n<div class="wrap">\n'
     )
 
     S.append(
@@ -481,7 +490,7 @@ def write_html(path, result):
   <div class="disclaimer">本报告由 <a href="https://github.com/ycbc-team/stock-voyager" target="_blank" rel="noopener noreferrer" style="color:var(--amber);font-weight:600;text-decoration:none">stock-voyager</a> 生成 · 仅供研究参考，不构成投资建议</div>
 '''
     )
-    S.append("</div>\n</body>\n</html>\n")
+    S.append(f"</div>\n{render_site_nav('fundflow')}\n</body>\n</html>\n")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("".join(S))

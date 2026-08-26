@@ -17,7 +17,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from typing import Any, Dict, List, Optional
+
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from common.site_navigation import render_site_nav
+from common.site_navigation import site_nav_css
 
 
 SIGNAL_TEXT = ["可分批关注", "持有观察", "谨慎观望"]
@@ -342,6 +351,7 @@ def render_page(data: Dict[str, Any]) -> str:
     css = _load_css()
     meta = data["meta"]
     market_code = meta.get("market_code", "hk")
+    nav_active = "stocktrend_ashare" if market_code == "ashare" else "stocktrend_hk"
     stocks = data["stocks"]
     by_sector = {}
     for stock in stocks:
@@ -351,7 +361,7 @@ def render_page(data: Dict[str, Any]) -> str:
     html.append(
         f'<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n'
         f'<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f'<title>{meta["title"]}</title>\n<style>{css}</style>\n</head>\n<body>\n<div class="container">\n'
+        f'<title>{meta["title"]}</title>\n<style>{css}{site_nav_css()}</style>\n</head>\n<body class="site-shell-body">\n<div class="container">\n'
     )
     html.append(
         f'''<div class="header">
@@ -388,6 +398,7 @@ def render_page(data: Dict[str, Any]) -> str:
         f'''<div class="disclaimer"><p>{meta.get("disclaimer", "")}</p></div>
 <div class="footer">{meta.get("footer", "")}</div>
 </div>
+{render_site_nav(nav_active)}
 </body>
 </html>
 '''

@@ -5,8 +5,8 @@
 #   - schedule  : 每个交易日 15:45（北京时间）= 07:45 UTC 收盘后运行（周一至周五）
 #   - workflow_dispatch : 支持手动触发（Actions 页 → Run workflow）
 #
-# 流程：checkout → 运行 main.py（统一生成 fundflow + stocktrend 页面）
-#       → 把 build/fundflow.html 作为站点根 index.html 上传，并附带 stocktrend 页面 → deploy-pages
+# 流程：checkout → 运行 main.py（统一生成首页 + fundflow + stocktrend 页面）
+#       → 把 build/index.html 作为站点根首页上传，并附带三个业务页面 → deploy-pages
 #
 # 前置要求（一次性）：
 #   仓库 Settings → Pages → Source 选「GitHub Actions」，之后每次运行自动更新站点。
@@ -62,16 +62,17 @@ jobs:
 
       - name: 检查报告生成
         run: |
+          test -f build/index.html && echo "✓ 导航首页已生成"
           test -f build/fundflow.html && echo "✓ 报告已生成"
           test -f build/stocktrend_ashare.html && echo "✓ A股 stocktrend 已生成"
           test -f build/stocktrend_hk.html && echo "✓ 港股 stocktrend 已生成"
           echo "「数据暂缺」占位数: $(grep -c '数据暂缺' build/fundflow.html || true)"
           echo "「<script>」数: $(grep -c '<script' build/fundflow.html || true)"
 
-      - name: 组装 Pages 站点（根路径直接展示报告）
+      - name: 组装 Pages 站点（根路径展示导航首页）
         run: |
           mkdir -p site
-          cp build/fundflow.html site/index.html
+          cp build/index.html site/index.html
           cp build/fundflow.html site/fundflow.html
           cp build/stocktrend_ashare.html site/stocktrend_ashare.html
           cp build/stocktrend_hk.html site/stocktrend_hk.html
