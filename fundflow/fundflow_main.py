@@ -1,84 +1,49 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-A股收盘主脚本
-==============
-职责：
-  1. 调用 funflow_data_fetcher.py 生产中间数据
-  2. 将中间数据写入 build/funflow.json
-  3. 基于 JSON 中间产物调用 funflow_ui_renderer.py 生成 HTML
+"""fundflow 页面总控：先生成 JSON，再渲染 HTML。"""
+from __future__ import annotations
 
-默认产物：
-  - build/funflow.json
-  - build/funflow.html
-
-可选产物：
-  - build/funflow_industry.csv
-"""
 import argparse
 import os
+import sys
+from typing import Dict
 
-from funflow_data_fetcher import collect_report_data, default_build_dir, write_csv, write_json
-from funflow_ui_renderer import load_result, write_html
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 
-def main():
-    ap = argparse.ArgumentParser(description="A股收盘总控脚本：先生产数据，再基于 JSON 中间产物渲染 HTML")
-    ap.add_argument("--date", help="数据日期 YYYY-MM-DD（默认取最近交易日）")
-    ap.add_argument("--fmt", default="html", help="输出格式（逗号分隔，可多选）：html / json / csv（默认 html）")
-    ap.add_argument("--out", help="输出目录（默认 <项目根>/build）")
-    ap.add_argument("--merge", help="补全数据 JSON（主源被限流时填充缺失模块）")
-    ap.add_argument("--topn", type=int, default=10, help="个股资金流 TOP 数量")
-    args = ap.parse_args()
+from common.storage import default_build_dir
+from common.storage import read_json
+from fundflow.fundflow_data_fetcher import collect_report_data
+from fundflow.fundflow_data_fetcher import write_report_json
+from fundflow.fundflow_ui_renderer import write_html
 
-    out_dir = args.out or default_build_dir()
-    os.makedirs(out_dir, exist_ok=True)
 
-    requested = {f.strip().lower() for f in args.fmt.split(",") if f.strip()}
-    if not requested:
-        requested = {"html"}
+def build_fundflow_report(data_date: str | None = None, out_dir: str | None = None, topn: int = 10, verbose: bool = True) -> Dict:
+    target_dir = out_dir or default_build_dir()
+    os.makedirs(target_dir, exist_ok=True)
 
-    emit_html = "html" in requested
-    emit_csv = "csv" in requested
-    emit_json = "json" in requested or emit_html
+    result = collect_report_data(data_date=data_date, topn=topn, verbose=verbose)
+    json_path = write_report_json(result, out_dir=target_dir)
+    html_path = os.path.join(target_dir, "fundflow.html")
+    write_html(html_path, read_json(json_path))
+    return {"json_path": json_path, "html_path": html_path, "result": result}
 
-    result = collect_report_data(
-        data_date=args.date,
-        topn=args.topn,
-        merge_path=args.merge,
-        verbose=True,
-    )
 
-    base = os.path.join(out_dir, "funflow")
-    written = []
-    json_path = f"{base}.json"
+def main() -> Dict:
+    parser = argparse.ArgumentParser(description="fundflow 页面总控：生成 build/fundflow.json 与 build/fundflow.html")
+    parser.add_argument("--date", help="数据日期 YYYY-MM-DD（默认取最近交易日）")
+    parser.add_argument("--out", help="输出目录（默认 <项目根>/build）")
+    parser.add_argument("--topn", type=int, default=10, help="个股资金流 TOP 数量")
+    args = parser.parse_args()
 
-    if emit_json:
-        write_json(json_path, result)
-        tag = "JSON*" if emit_html and "json" not in requested else "JSON "
-        written.append(f"{tag}: {json_path}")
-
-    if emit_csv:
-        if result["sw_industry"]:
-            csv_path = f"{base}_industry.csv"
-            write_csv(csv_path, result["sw_industry"])
-            written.append(f"CSV  : {csv_path}")
-        else:
-            print("[!] CSV 跳过：申万行业数据暂缺（--fmt csv 已指定，但无数据可导出）")
-
-    if emit_html:
-        html_path = f"{base}.html"
-        render_input = load_result(json_path)
-        write_html(html_path, render_input)
-        written.append(f"HTML : {html_path}")
-
-    print(f"\n[✓] 已写出（{result['data_date']}，目录 {out_dir}）：")
-    for item in written:
-        print("    " + item)
-    if emit_html and "json" not in requested:
-        print("[i] JSON* 为 HTML 渲染所需中间产物，已按 MVC 流程保存在 build/ 中")
-    print(f"[i] 数据抓取阶段共发起 {result.get('request_count', 0)} 次 HTTP 请求（含失败重试）")
-    return result
+    written = build_fundflow_report(data_date=args.date, out_dir=args.out, topn=args.topn, verbose=True)
+    print("\n[✓] 已写出：")
+    print(f"    JSON : {written['json_path']}")
+    print(f"    HTML : {written['html_path']}")
+    return written
 
 
 if __name__ == "__main__":

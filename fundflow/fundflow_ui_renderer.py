@@ -7,7 +7,7 @@ A股收盘 HTML 渲染脚本
   1. 读取 JSON 中间产物
   2. 基于 report.css 生成纯静态 HTML 页面
 
-本脚本不负责行情抓取；数据生产由 funflow_data_fetcher.py 完成。
+本脚本不负责行情抓取；数据生产由 fundflow_data_fetcher.py 完成。
 """
 import argparse
 import datetime
@@ -488,10 +488,10 @@ def write_html(path, result):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="A股收盘 HTML 渲染脚本（读取 JSON 中间产物，输出 build/funflow.html）")
+    ap = argparse.ArgumentParser(description="A股收盘 HTML 渲染脚本（读取 JSON 中间产物，输出 build/fundflow.html）")
     build_dir = default_build_dir()
-    ap.add_argument("--input", default=os.path.join(build_dir, "funflow.json"), help="输入 JSON 路径")
-    ap.add_argument("--output", default=os.path.join(build_dir, "funflow.html"), help="输出 HTML 路径")
+    ap.add_argument("--input", default=os.path.join(build_dir, "fundflow.json"), help="输入 JSON 路径")
+    ap.add_argument("--output", default=os.path.join(build_dir, "fundflow.html"), help="输出 HTML 路径")
     args = ap.parse_args()
 
     if not os.path.exists(args.input):

@@ -1,0 +1,1 @@
+"""stocktrend package."""

@@ -61,41 +61,41 @@
 
 | 文件 | 作用 |
 |------|------|
-| `fundflow_main.py` | **主脚本**。先调用数据生产层，再基于 JSON 中间产物生成 HTML。 |
-| `funflow_data_fetcher.py` | **数据抓取层**。覆盖主要指数、申万一级 31 行业涨跌幅 + 按申万成分股聚合的主力净流入、北向资金（仅成交额+占比，净买入不编造）、风格指数、个股资金流 TOP 与热点异动。抓取层使用 `AKShare`，指数回退腾讯 gtimg；个股资金流优先按申万成分股 `secid` 分批请求，行业聚合与个股 TOP 共用同一批数据。 |
-| `funflow_ui_renderer.py` | **UI 渲染层**。读取 JSON 中间产物并生成纯静态 HTML。 |
+| `main.py` | **仓库主入口**。统一生成 `fundflow` 与 `stocktrend` 的 JSON / HTML 页面。 |
+| `common/` | **共享模块**。统一放置请求逻辑、JSON 读写、`common/cache/` 等公共能力。 |
+| `fundflow_main.py` | `fundflow` 页面总控。先生成 JSON，再渲染 HTML。 |
+| `fundflow_data_fetcher.py` | `fundflow` 数据抓取层。每个请求模块单独产出到 `build/`，再汇总成 `build/fundflow.json`。 |
+| `fundflow_ui_renderer.py` | **UI 渲染层**。读取 JSON 中间产物并生成纯静态 HTML。 |
 | `report.css` | 网页报告样式源（深色金融终端风、涨红跌绿），生成 HTML 时**内联**进产物，保证 HTML 单文件自包含。 |
 
 **输出**（默认写入项目根 `build/`，已 gitignore；文件名固定无日期，每天运行覆盖前一天）：
 
 | 产物 | 说明 |
 |------|------|
-| `build/funflow.html` | **默认输出**。纯静态网页报告（数据内联、零 JS），移动端 Safari 可直接打开；打开/刷新即见最新。 |
-| `build/funflow.json` / `_industry.csv` | 中间数据与可选行业表，由主脚本或数据层脚本产出。 |
+| `build/fundflow.html` | **默认输出**。纯静态网页报告（数据内联、零 JS），移动端 Safari 可直接打开；打开/刷新即见最新。 |
+| `build/fundflow.json` | `fundflow` 汇总 JSON。 |
+| `build/fundflow_*.json` / `build/stocktrend_*.json` | 各请求模块拆分后的 JSON 产物，供跨页面复用。 |
 
-**日常用法**：每天跑一次 py 更新数据，打开 `build/funflow.html` 即见最新报告。
+**日常用法**：每天跑一次 py 更新数据，打开 `build/fundflow.html` 即见最新报告。
 
 ```bash
-cd fundflow
-../.venv/bin/python -m pip install -r ../requirements.txt
-../.venv/bin/python fundflow_main.py                       # 默认输出 build/funflow.json + build/funflow.html
-../.venv/bin/python fundflow_main.py --fmt json,csv,html   # 同时输出 JSON + CSV + HTML
-../.venv/bin/python fundflow_main.py --fmt csv --out /tmp/x  # 仅申万行业 CSV，自定义目录
-# 省略 --date 自动取最近交易日；偶发超时调优：
-# EM_TIMEOUT=8 EM_RETRIES=2 FUND_FLOW_BATCH_SIZE=400 ../.venv/bin/python fundflow_main.py
+./.venv/bin/python main.py
+./.venv/bin/python main.py --date 2026-08-25
+./.venv/bin/python fundflow/fundflow_main.py
+./.venv/bin/python stocktrend/stocktrend_data_fetcher.py --market all
 ```
 
 > 注：
-> 1. `fundflow/.cache/` 需要随仓库提交，避免 GitHub Actions 每次都是全量回源。
-> 2. 申万一级映射和申万成分股映射属于长周期静态数据，默认缓存 180 天；可用 `FUND_STATIC_CACHE_TTL_HOURS` 调整。
-> 3. 个股资金流默认按 `FUND_FLOW_BATCH_SIZE=400` 分批请求 `push2delay`，比全市场分页排行请求数更低。
+> 1. 长期稳定数据统一放在 `common/cache/`；每天变化的数据统一放在项目根 `build/`。
+> 2. `fundflow` 与 `stocktrend` 共用 `common/market_data.py` 中的请求逻辑。
+> 3. `stocktrend` 会优先读取 `build/stock_fundflow_today_full_<date>.json`，直接复用 `fundflow` 已请求过的资金流结果。
 
 ## 自动部署（GitHub Actions + Pages）
 
 `.github/workflows/ashare-report.yml` 会在**每个交易日 15:45（北京时间）收盘后**自动运行脚本并把 HTML 部署到 GitHub Pages：
 
 - 触发：`push`（推 main 即跑）+ `schedule`（周一至五 07:45 UTC）+ `workflow_dispatch`（可手动触发）
-- 流程：`python3 fundflow/fundflow_main.py`（默认产出 JSON 中间产物 + HTML，请求间隔 REQ_DELAY=0.4s）→ 把 `build/funflow.html` 作为站点根 `index.html` 上传 → `deploy-pages`
+- 流程：`python3 main.py`（统一产出 `fundflow` + `stocktrend` JSON / HTML）→ 把 `build/fundflow.html` 作为站点根 `index.html` 上传，并附带 `stocktrend_ashare.html` / `stocktrend_hk.html` → `deploy-pages`
 - 一次性配置：仓库 **Settings → Pages → Source 选「GitHub Actions」**，之后每次运行自动更新站点
 - 手动触发：仓库 **Actions → 选中该工作流 → Run workflow**
 - 站点地址：`https://<owner>.github.io/<repo>/`（根路径即最新报告）
