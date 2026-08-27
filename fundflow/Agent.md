@@ -110,7 +110,7 @@ cd fundflow
 
 `.github/workflows/ashare-report.yml`：每个交易日 16:01（北京时间）自动运行脚本并部署 GitHub Pages。
 
-- 触发：`schedule`（周一至五 08:01 UTC）+ `workflow_dispatch`（手动）
+- 触发：`push`（推 main 即刷新）+ `schedule`（周一至五 08:01 UTC）+ `workflow_dispatch`（手动触发）
 - 流程：`python3 main.py`（统一生成导航首页 + `fundflow` + `stocktrend` 页面）→ 上传 `build/site/` → deploy-pages
 - 一次性配置：仓库 **Settings → Pages → Source 选「GitHub Actions」**
 - 站点：`https://<owner>.github.io/<repo>/`（根路径即导航首页）
