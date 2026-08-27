@@ -197,6 +197,77 @@ def _public_footer(meta: Dict[str, Any]) -> str:
     return f"{meta.get('title', '')} · 静态收盘快照 · {meta.get('snap_iso', '最新交易日')}"
 
 
+def _render_page_script() -> str:
+    return """<script>
+(function () {
+  let syncingFromHistory = false;
+
+  function getModalToggles() {
+    return Array.from(document.querySelectorAll('.modal-toggle'));
+  }
+
+  function getOpenToggle() {
+    return getModalToggles().find(function (toggle) { return toggle.checked; }) || null;
+  }
+
+  function applyModalState(state) {
+    const modalId = state && state.stocktrendModalId ? state.stocktrendModalId : '';
+    syncingFromHistory = true;
+    getModalToggles().forEach(function (toggle) {
+      toggle.checked = modalId !== '' && toggle.id === modalId;
+    });
+    syncingFromHistory = false;
+  }
+
+  document.addEventListener('click', function (event) {
+    const anchorBtn = event.target.closest('.modal-anchor-btn');
+    if (anchorBtn) {
+      const targetId = anchorBtn.getAttribute('data-target');
+      const target = targetId ? document.getElementById(targetId) : null;
+      if (!target) return;
+      event.preventDefault();
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+
+    const closer = event.target.closest('.modal-return, .modal-close, .modal-backdrop');
+    if (!closer) return;
+
+    const modalId = closer.getAttribute('for');
+    const openToggle = getOpenToggle();
+    if (!modalId || !openToggle || openToggle.id !== modalId) return;
+
+    if (history.state && history.state.stocktrendModalId === modalId) {
+      event.preventDefault();
+      history.back();
+    }
+  });
+
+  document.addEventListener('change', function (event) {
+    const toggle = event.target.closest('.modal-toggle');
+    if (!toggle || syncingFromHistory) return;
+
+    if (toggle.checked) {
+      if (!history.state || history.state.stocktrendModalId !== toggle.id) {
+        history.pushState({ stocktrendModalId: toggle.id }, '', window.location.href);
+      }
+      return;
+    }
+
+    if (history.state && history.state.stocktrendModalId === toggle.id) {
+      history.back();
+    }
+  });
+
+  window.addEventListener('popstate', function (event) {
+    applyModalState(event.state || null);
+  });
+
+  applyModalState(history.state || null);
+})();
+</script>"""
+
+
 def _render_card(stock: Dict[str, Any], market_code: str) -> str:
     modal_id = f"m-{market_code}-{stock['code']}"
     pe_text = "亏损/缺失" if stock.get("pe") in (None, 0) or (stock.get("pe") or 0) < 0 else f"{stock['pe']:.2f}"
@@ -510,6 +581,7 @@ def render_page(data: Dict[str, Any]) -> str:
 <div class="footer">{_public_footer(meta)}</div>
 </div>
 {render_site_nav(nav_active)}
+{_render_page_script()}
 </body>
 </html>
 '''
