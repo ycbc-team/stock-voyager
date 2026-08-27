@@ -123,17 +123,8 @@ def _empty_body(msg):
     )
 
 
-def product_source_text(source):
-    parts = []
-    if "AKShare" in source:
-        parts.append("AKShare")
-    if "东方财富" in source:
-        parts.append("东方财富")
-    if "腾讯" in source or "gtimg" in source:
-        parts.append("腾讯财经（回退）")
-    if not parts:
-        return source
-    return "、".join(parts) + " 等公开数据"
+def product_source_text():
+    return "公开数据整理"
 
 
 def build_market_views(result):
@@ -248,12 +239,13 @@ def write_html(path, result):
     </div>
     <div class="hdr-r">
       <span class="live-badge"><span class="dot"></span>数据日期 {d}（{wd}）· 收盘</span>
-      <div class="src-line">更新于 <b>{result["generated_at"]}</b> ｜ 数据源：{product_source_text(result["source"])}</div>
+      <div class="src-line">更新于 <b>{result["generated_at"]}</b> ｜ {product_source_text()}</div>
       <div class="src-line">北向成交日 <b>{nb.get("trade_date") or "—"}</b> ｜ 行业数据 {len(sw)} / 31</div>
     </div>
   </div>
 '''
     )
+    S.append('  <div class="style-note"><b style="color:var(--amber)">⚠ 非实时页面</b> ｜ 当前仅展示收盘后的静态结果，适合盘后复盘与结构观察，不展示盘中实时跳动数据。</div>\n')
     for warning in result.get("fetch_warnings") or []:
         S.append(f'  <div class="style-note"><b style="color:var(--amber)">⚠ 数据抓取提示</b> ｜ {warning}</div>\n')
 
@@ -491,7 +483,7 @@ def write_html(path, result):
     S.append(
         f'''  <div class="foot">
     <b>数据日期</b>：{d}（{wd}，收盘后口径）　｜　<b>更新时间</b>：{result["generated_at"]}<br>
-    <b>数据来源</b>：{product_source_text(result["source"])}；北向成交额为公开披露项，<b>净买入不披露、不编造</b>。<br>
+    <b>数据来源</b>：{product_source_text()}；北向成交额为公开披露项，<b>净买入不披露、不编造</b>。<br>
     <b>明细来源</b>：{result["source"]}<br>
     <b>口径说明</b>：涨红跌绿（A股惯例）；成交额/净流入单位为元，展示折算为亿/万亿；行业与个股口径以公开行情数据为准。
   </div>

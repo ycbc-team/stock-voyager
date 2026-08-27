@@ -130,10 +130,78 @@ def _fmt_chg_html(value: Optional[float]) -> str:
     return f'<span class="{cls}">{sign}{value:.2f}%</span>'
 
 
+def _signal_basis_text(stock: Dict[str, Any], market_code: str) -> str:
+    reasons: List[str] = []
+    pos = _to_float(stock.get("pos"))
+    pe = _to_float(stock.get("pe"))
+    div = _to_float(stock.get("div"))
+    main_inflow = _to_float(stock.get("main_inflow"))
+
+    if pos is not None:
+        if pos <= 35:
+            reasons.append("52w低位")
+        elif pos >= 75:
+            reasons.append("52w高位")
+    if pe is not None:
+        if pe <= 0:
+            reasons.append("PE亏损")
+        elif pe <= 20:
+            reasons.append("PE偏低")
+        elif pe >= 35:
+            reasons.append("PE偏高")
+    if div is not None and div >= 2.5:
+        reasons.append("股息率较高")
+    if market_code == "ashare" and main_inflow is not None:
+        if main_inflow > 0:
+            reasons.append("主力流入")
+        elif main_inflow < 0:
+            reasons.append("主力流出")
+
+    if not reasons:
+        return "依据：52周位置、估值与资金面综合判断"
+    return "依据：" + " / ".join(reasons[:3])
+
+
+def _module_hint(section: str, market_code: str) -> str:
+    hints = {
+        "snapshot": "价格、涨跌、成交额均为收盘口径；PE / PB 取最近可得公开指标。",
+        "capital_ashare": "主力净流入为当日口径；北向持股按最近公开披露日展示。",
+        "capital_hk": "成交额为收盘口径；南向持股按最近公开披露日展示。",
+        "finance": "ROE、毛利率、资产负债率取最近公开财报；近 5 年分红缺失时直接展示“—”。",
+    }
+    if section == "capital":
+        key = "capital_ashare" if market_code == "ashare" else "capital_hk"
+        return hints[key]
+    return hints.get(section, "")
+
+
+def _public_subtitle(meta: Dict[str, Any]) -> str:
+    market_code = meta.get("market_code", "hk")
+    if market_code == "ashare":
+        return "聚焦核心 A 股清单，便于按估值、位置、资金面、财务与风险提示做盘后复盘。"
+    return "聚焦港股代表标的，便于按估值、位置、南向持股、分红与风险提示做盘后复盘。"
+
+
+def _public_date_text(meta: Dict[str, Any]) -> str:
+    return f"非实时页面：{meta.get('snap_iso', '最新交易日')} 收盘快照"
+
+
+def _public_databadge(meta: Dict[str, Any]) -> str:
+    market_code = meta.get("market_code", "hk")
+    if market_code == "ashare":
+        return "⚠️ 数据口径：本页仅展示收盘后的静态结果；价格、估值、资金面、财务与分红为公开数据整理，缺失字段直接显示“—”。"
+    return "⚠️ 数据口径：本页仅展示收盘后的静态结果；价格、估值、南向持股、财务与分红为公开数据整理，缺失字段直接显示“—”。"
+
+
+def _public_footer(meta: Dict[str, Any]) -> str:
+    return f"{meta.get('title', '')} · 静态收盘快照 · {meta.get('snap_iso', '最新交易日')}"
+
+
 def _render_card(stock: Dict[str, Any], market_code: str) -> str:
     modal_id = f"m-{market_code}-{stock['code']}"
     pe_text = "亏损/缺失" if stock.get("pe") in (None, 0) or (stock.get("pe") or 0) < 0 else f"{stock['pe']:.2f}"
     div_text = "—" if stock.get("div") is None else f"{stock['div']:.2f}%"
+    basis_text = _signal_basis_text(stock, market_code)
     return f'''<div class="stock-item">
   <input type="checkbox" id="{modal_id}" class="modal-toggle">
   <label class="stock-card border-{stock.get("border", "gray")}" for="{modal_id}">
@@ -141,7 +209,9 @@ def _render_card(stock: Dict[str, Any], market_code: str) -> str:
     <div class="name">{stock.get("zh", stock["code"])} {stock["code"]}</div>
     <div class="data">涨跌 {_fmt_chg_html(stock.get("chg"))} | PE <b>{pe_text}</b> | <span class="good">{div_text}</span></div>
     <div class="yt" style="color:{SIGNAL_COLOR[stock.get("signal", 1)]}">{SIGNAL_EMOJI[stock.get("signal", 1)]} {SIGNAL_TEXT[stock.get("signal", 1)]}</div>
+    <div class="basisline">{basis_text}</div>
     <div class="scoremark">市值 {_fmt_mkt(stock.get("mkt"))} · 52w位 {("—" if stock.get("pos") is None else f"{stock['pos']:.0f}%")}</div>
+    <div class="card-cta">点击查看详情 <span>→</span></div>
   </label>
   {_render_modal(stock, market_code)}
 </div>'''
@@ -199,6 +269,7 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
     market_meta = meta_map[market_code]
     signal = stock.get("signal", 1)
     modal_id = f"m-{market_code}-{stock['code']}"
+    section_prefix = f"{market_code}-{stock['code']}"
     risks = stock.get("risks") or ["暂无风险备注"]
     risks_html = "".join(f'<div class="risk">{item}</div>' for item in risks[:3])
     pos_text = "—" if stock.get("pos") is None else f"{stock['pos']:.0f}%"
@@ -208,6 +279,7 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
     margin_text = "—" if stock.get("margin") is None else f"{stock['margin']:.2f}%"
     liab_text = "—" if stock.get("liab") is None else f"{stock['liab']:.2f}%"
     div_text = "—" if stock.get("div") is None else f"{stock['div']:.2f}%"
+    basis_text = _signal_basis_text(stock, market_code)
     financial_period = str(stock.get("financial_report_year") or "—")
     holding_date = str(stock.get("north_date") or stock.get("south_date") or "—")
     history_date = str(stock.get("history_as_of") or "—")
@@ -215,19 +287,31 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
     <label class="modal-backdrop" for="{modal_id}"></label>
     <div class="modal">
       <div class="modal-x">
-        <span class="hint">点击空白处或 ✕ 关闭</span>
+        <div class="modal-actions">
+          <label class="modal-return" for="{modal_id}">← 返回列表</label>
+          <span class="hint">详情较长，建议先看估值与位置，再看资金和财务</span>
+        </div>
         <label class="modal-close" for="{modal_id}">✕ 关闭</label>
       </div>
       <div class="modal-body">
-        <div class="databadge">⚠️ {market_meta["badge"]}：本页为静态收盘快照，缺失字段直接展示“—”，不做补值。</div>
+        <div class="databadge">⚠️ {market_meta["badge"]}：这不是实时行情页面，当前仅展示静态收盘快照；缺失字段直接展示“—”，不做补值。</div>
         <div class="stock-head">
           <div class="code">{market_meta["code_suffix"]}</div>
           <h1>{stock.get("zh", stock["code"])}</h1>
           <div class="en">{stock.get("en", stock.get("zh", stock["code"]))}</div>
           <div class="ind">📌 {stock.get("l1", "")} · {stock.get("l2", "")}</div>
           <div class="scorepill" style="background:{SIGNAL_COLOR[signal]}">{SIGNAL_EMOJI[signal]} {SIGNAL_TEXT[signal]}</div>
+          <div class="scorebasis">{basis_text}</div>
         </div>
-        <div class="module">
+        <div class="modal-anchor-nav">
+          <a href="#{section_prefix}-snapshot">行情</a>
+          <a href="#{section_prefix}-valuation">估值</a>
+          <a href="#{section_prefix}-capital">资金</a>
+          <a href="#{section_prefix}-finance">财务</a>
+          <a href="#{section_prefix}-risk">风险</a>
+          <a href="#{section_prefix}-summary">总结</a>
+        </div>
+        <div class="module" id="{section_prefix}-snapshot">
           <h2><span class="num">1</span>行情快照</h2>
           <div class="metric-cards">
             <div class="metric-card"><div class="mc-k">最新价</div><div class="mc-v">{_fmt_price(_to_float(stock.get("price")))}<span class="mc-u">{market_meta["currency_unit"]}</span></div><div class="mc-s {_pct_class(stock.get("chg"))}">{_fmt_signed_pct(stock.get("chg"))}</div></div>
@@ -235,6 +319,7 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
             <div class="metric-card"><div class="mc-k">总市值</div><div class="mc-v">{_fmt_mkt(stock.get("mkt"))}</div><div class="mc-s">估值视角</div></div>
             <div class="metric-card"><div class="mc-k">PE / PB</div><div class="mc-v">{pe_text}</div><div class="mc-s">PB {pb_text}</div></div>
           </div>
+          <div class="section-hint">{_module_hint("snapshot", market_code)}</div>
           <div class="kv">
             {_render_kv("今开 / 昨收", f"{_fmt_price(_to_float(stock.get('open')))} / {_fmt_price(_to_float(stock.get('prev')))}")}
             {_render_kv("成交额", _fmt_amount(stock.get("amount")))}
@@ -242,9 +327,9 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
             {_render_kv("52周分位", pos_text)}
           </div>
         </div>
-        <div class="module">
+        <div class="module" id="{section_prefix}-valuation">
           <h2><span class="num">2</span>估值与位置</h2>
-          <div class="conclusion-bar {CONCL_CLASS[signal]}"><span class="cb-tag">{SIGNAL_EMOJI[signal]} {SIGNAL_TEXT[signal]}</span><span class="cb-reason">{stock.get("suggest", SIGNAL_TEXT[signal])}</span></div>
+          <div class="conclusion-bar {CONCL_CLASS[signal]}"><span class="cb-tag">{SIGNAL_EMOJI[signal]} {SIGNAL_TEXT[signal]}</span><span class="cb-reason">{stock.get("suggest", SIGNAL_TEXT[signal])}</span><span class="cb-basis">{basis_text}</span></div>
           <div class="kv">
             {_render_kv("52周低点", _fmt_price(_to_float(stock.get("w52l"))))}
             {_render_kv("52周高点", _fmt_price(_to_float(stock.get("w52h"))))}
@@ -253,9 +338,10 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
           </div>
           <div class="note">{stock.get("trend", "趋势描述暂缺")}</div>
         </div>
-        <div class="module">
+        <div class="module" id="{section_prefix}-capital">
           <h2><span class="num">3</span>资金面动态</h2>
           <div class="summary">{stock.get("capital", "资金面描述暂缺")}</div>
+          <div class="section-hint">{_module_hint("capital", market_code)}</div>
           <div class="kv">
             {_render_kv("资金面", market_meta["flow_line"])}
             {_render_kv("持股比例", market_meta["holding_line"])}
@@ -264,8 +350,9 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
           </div>
           {_render_issue_notes(stock.get("data_issues") or [])}
         </div>
-        <div class="module">
+        <div class="module" id="{section_prefix}-finance">
           <h2><span class="num">4</span>财务与分红</h2>
+          <div class="section-hint">{_module_hint("finance", market_code)}</div>
           <div class="kv">
             {_render_kv("ROE", roe_text)}
             {_render_kv("毛利率", margin_text)}
@@ -289,11 +376,11 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
             <div class="yv-item"><div class="yv-k">年初至今</div><div class="yv-v {_pct_class(stock.get('ytd'))}">{_fmt_signed_pct(stock.get("ytd"))}</div></div>
           </div>
         </div>
-        <div class="module">
+        <div class="module" id="{section_prefix}-risk">
           <h2><span class="num">6</span>风险提示</h2>
           {risks_html}
         </div>
-        <div class="module">
+        <div class="module" id="{section_prefix}-summary">
           <h2><span class="num">7</span>一句话总结</h2>
           <div class="summary">{stock.get("summary", "暂无总结")}</div>
         </div>
@@ -386,12 +473,13 @@ def render_page(data: Dict[str, Any]) -> str:
     )
     html.append(
         f'''<div class="header">
-  <div class="tag">{meta.get("tag", "")}</div>
+  <div class="tag">静态收盘快照 · 非实时 · {meta.get("snap_iso", meta.get("tag", ""))}</div>
   <h1>{meta.get("title", "")}</h1>
-  <div class="subtitle">{meta.get("subtitle", "")}</div>
-  <div class="date">{meta.get("date", "")}</div>
+  <div class="subtitle">{_public_subtitle(meta)}</div>
+  <div class="date">{_public_date_text(meta)}</div>
 </div>
-<div class="databadge">{meta.get("databadge", "")}</div>
+<div class="databadge"><b>这不是实时行情页面。</b> 当前页面只展示收盘后的静态结果，适合盘后复盘和清单式跟踪，不展示盘中实时跳动数据。</div>
+<div class="databadge">{_public_databadge(meta)}</div>
 '''
     )
     for warning in meta.get("fetch_warnings") or []:
@@ -419,7 +507,7 @@ def render_page(data: Dict[str, Any]) -> str:
     html.append(_render_combos(data))
     html.append(
         f'''<div class="disclaimer"><p>{meta.get("disclaimer", "")}</p></div>
-<div class="footer">{meta.get("footer", "")}</div>
+<div class="footer">{_public_footer(meta)}</div>
 </div>
 {render_site_nav(nav_active)}
 </body>

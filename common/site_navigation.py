@@ -39,6 +39,12 @@ html, body {
   background: rgba(13, 17, 23, 0.88);
   backdrop-filter: blur(16px);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.32);
+  transition: transform .22s ease, opacity .22s ease;
+}
+.site-nav.is-hidden {
+  transform: translateX(-50%) translateY(calc(100% + 28px));
+  opacity: 0;
+  pointer-events: none;
 }
 .site-nav-item {
   display: block;
@@ -102,6 +108,19 @@ html, body {
   margin-top: 12px;
   color: #8b949e;
   font-size: 13px;
+}
+.site-hub-alert {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  color: #f0c040;
+  background: rgba(240, 192, 64, 0.1);
+  border: 1px solid rgba(240, 192, 64, 0.22);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.site-hub-alert b {
+  color: #ffd86b;
 }
 .site-hub-grid {
   display: grid;
@@ -171,6 +190,47 @@ html, body {
 """
 
 
+def render_site_nav_script() -> str:
+    return """
+<script>
+(function () {
+  const nav = document.querySelector('.site-nav');
+  if (!nav) return;
+
+  let lastY = window.scrollY || 0;
+  let ticking = false;
+
+  function syncNav() {
+    const currentY = window.scrollY || 0;
+    const viewportBottom = currentY + window.innerHeight;
+    const docHeight = document.documentElement.scrollHeight;
+    const isBottom = viewportBottom >= docHeight - 4;
+    const isNearTop = currentY <= 24;
+    const scrollingDown = currentY > lastY + 8;
+    const scrollingUp = currentY < lastY - 8;
+
+    if (isNearTop || isBottom || scrollingUp) {
+      nav.classList.remove('is-hidden');
+    } else if (scrollingDown) {
+      nav.classList.add('is-hidden');
+    }
+
+    lastY = currentY;
+    ticking = false;
+  }
+
+  window.addEventListener('scroll', function () {
+    if (ticking) return;
+    ticking = true;
+    window.requestAnimationFrame(syncNav);
+  }, { passive: true });
+
+  syncNav();
+})();
+</script>
+"""
+
+
 def render_site_nav(active: str) -> str:
     items = []
     for tab in SITE_TABS:
@@ -180,7 +240,7 @@ def render_site_nav(active: str) -> str:
         items.append(
             f'<a class="{classes}" href="{escape(tab["href"])}">{escape(tab["label"])}</a>'
         )
-    return '<nav class="site-nav" aria-label="站点导航">' + "".join(items) + "</nav>"
+    return '<nav class="site-nav" aria-label="站点导航">' + "".join(items) + "</nav>" + render_site_nav_script()
 
 
 def render_site_index(title: str, subtitle: str, date_text: str, cards: Iterable[Mapping[str, str]]) -> str:
@@ -217,8 +277,9 @@ def render_site_index(title: str, subtitle: str, date_text: str, cards: Iterable
       <h1>{title}</h1>
       <div class="site-hub-subtitle">{subtitle}</div>
       <div class="site-hub-date">{date_text}</div>
+      <div class="site-hub-alert"><b>这不是实时行情页面。</b> 当前站点展示的是静态页面与收盘快照，适合盘后复盘、看结构和做清单式跟踪，不展示盘中实时跳动数据。</div>
       <div class="site-hub-grid">{cards}</div>
-      <div class="site-hub-note">推荐组织方式：保留 3 个独立 HTML 作为真实内容页，首页只做入口，页内使用底部 tab 导航切换。这样最适合静态部署、分享单页链接和后续继续扩展。</div>
+      <div class="site-hub-note">建议从“资金流日报”先看当天市场主线，再进入 A 股或港股页面看个股细节，整体更适合盘后复盘和清单式跟踪。</div>
     </section>
   </div>
 </main>

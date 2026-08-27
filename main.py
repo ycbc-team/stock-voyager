@@ -48,7 +48,7 @@ def build_site_index(fundflow_result: Dict, stocktrend_result: Dict, out_dir: st
         {
             "title": "A股资金流日报",
             "href": "fundflow.html",
-            "badge": "fundflow",
+            "badge": "先看市场",
             "description": "看市场强弱、行业热力图、主力净流入、北向成交占比，适合先把握当天全市场主线。",
         }
     ]
@@ -57,7 +57,7 @@ def build_site_index(fundflow_result: Dict, stocktrend_result: Dict, out_dir: st
             {
                 "title": "A股个股走势",
                 "href": "stocktrend_ashare.html",
-                "badge": "stocktrend / ashare",
+                "badge": "A股清单",
                 "description": "聚焦 32 只核心 A 股，按收盘口径查看估值、位置、资金面、财务与风险提示。",
             }
         )
@@ -66,15 +66,15 @@ def build_site_index(fundflow_result: Dict, stocktrend_result: Dict, out_dir: st
             {
                 "title": "港股个股走势",
                 "href": "stocktrend_hk.html",
-                "badge": "stocktrend / hk",
+                "badge": "港股清单",
                 "description": "查看港股代表标的的收盘快照、估值、南向持股和分红信息，适合和 A 股页并列浏览。",
             }
         )
 
     html = render_site_index(
         title="stock-voyager 静态报告导航",
-        subtitle="统一入口页，负责把 A 股资金流、A 股个股走势、港股个股走势三张静态页面组织在一起。",
-        date_text=f"当前页面数据日期：{trade_date}",
+        subtitle="统一入口页，负责把 A 股资金流、A 股个股走势、港股个股走势三张静态页面组织在一起；当前更偏盘后复盘与清单式跟踪，而非盘中实时看盘。",
+        date_text=f"当前页面数据日期：{trade_date}（静态收盘快照 / 非实时）",
         cards=cards,
     )
     index_path = os.path.join(target_dir, "index.html")
