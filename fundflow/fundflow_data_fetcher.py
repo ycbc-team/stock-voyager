@@ -250,10 +250,12 @@ def _fetch_sw_stock_map_payload() -> Dict[str, Any]:
     ak = get_akshare()
     stock_to_industry: Dict[str, str] = {}
     industry_sizes: Dict[str, int] = {}
+    failed_industries: List[str] = []
     for code in SW_INDUSTRY:
         try:
             df = call_akshare_with_retry(f"申万成分股 {code}", ak.index_component_sw, symbol=code)
         except Exception:
+            failed_industries.append(code)
             continue
         count = 0
         for row in df.to_dict("records"):
@@ -265,6 +267,8 @@ def _fetch_sw_stock_map_payload() -> Dict[str, Any]:
     return {
         "stock_to_industry": stock_to_industry,
         "industry_sizes": industry_sizes,
+        "failed_industries": failed_industries,
+        "is_complete": len(failed_industries) == 0,
         "mutable": True,
         "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -272,7 +276,7 @@ def _fetch_sw_stock_map_payload() -> Dict[str, Any]:
 
 def fetch_sw_stock_map(required_codes: Optional[List[str]] = None) -> Tuple[Dict[str, str], str]:
     cached = load_cache_json("sw_stock_map.json")
-    cached_map = (cached or {}).get("stock_to_industry") or {}
+    cached_map = dict((cached or {}).get("stock_to_industry") or {})
     required = {str(code).zfill(6) for code in (required_codes or []) if code}
     missing_codes = sorted(code for code in required if code not in cached_map)
     if cached_map and not missing_codes:
@@ -282,22 +286,60 @@ def fetch_sw_stock_map(required_codes: Optional[List[str]] = None) -> Tuple[Dict
     if cached_map and missing_codes:
         refresh_reason = f"missing_codes:{','.join(missing_codes[:20])}"
     payload = _fetch_sw_stock_map_payload()
-    save_cache_json(
-        "sw_stock_map.json",
-        payload,
-        source="AKShare 申万成分股",
-        ttl_hours=None,
-        tags={
-            "cache_version": STATIC_CACHE_SCHEMA_VERSION,
-            "refresh_policy": "refresh_when_required_codes_are_missing",
-            "refresh_reason": refresh_reason,
-            "missing_codes_refreshed": missing_codes,
-        },
-    )
+    refreshed_map = dict(payload.get("stock_to_industry") or {})
+    failed_industries = list(payload.get("failed_industries") or [])
+    is_complete = bool(payload.get("is_complete"))
     source = "AKShare 申万成分股"
+
+    if is_complete:
+        save_cache_json(
+            "sw_stock_map.json",
+            payload,
+            source="AKShare 申万成分股",
+            ttl_hours=None,
+            tags={
+                "cache_version": STATIC_CACHE_SCHEMA_VERSION,
+                "refresh_policy": "refresh_when_required_codes_are_missing",
+                "refresh_reason": refresh_reason,
+                "missing_codes_refreshed": missing_codes,
+            },
+        )
+    elif cached_map:
+        preserved_map = {
+            stock_code: industry_code
+            for stock_code, industry_code in cached_map.items()
+            if industry_code in failed_industries
+        }
+        merged_map = dict(refreshed_map)
+        merged_map.update(preserved_map)
+        payload = {
+            **payload,
+            "stock_to_industry": merged_map,
+            "is_complete": False,
+            "merged_with_existing_cache": True,
+        }
+        save_cache_json(
+            "sw_stock_map.json",
+            payload,
+            source="AKShare 申万成分股（失败行业沿用旧缓存）",
+            ttl_hours=None,
+            tags={
+                "cache_version": STATIC_CACHE_SCHEMA_VERSION,
+                "refresh_policy": "refresh_when_required_codes_are_missing",
+                "refresh_reason": refresh_reason,
+                "missing_codes_refreshed": missing_codes,
+                "failed_industries": failed_industries,
+                "merged_with_existing_cache": True,
+            },
+        )
+        refreshed_map = merged_map
+        source = f"AKShare 申万成分股（{len(failed_industries)} 个行业失败，已保留旧缓存映射）"
+    else:
+        source = f"AKShare 申万成分股（{len(failed_industries)} 个行业失败，未写入 common/cache）"
+
     if missing_codes:
         source += f"（检测到 {len(missing_codes)} 只未映射股票，已自动刷新）"
-    return payload["stock_to_industry"], source
+    return refreshed_map, source
 
 
 def _fetch_sw_index_spot_payload() -> Dict[str, Any]:
@@ -434,9 +476,6 @@ def _fetch_northbound_payload(sh_amount: Optional[float], sz_amount: Optional[fl
                 result["sh_connect_turnover"] = sh_turnover
                 result["sz_connect_turnover"] = sz_turnover
                 result["total_turnover"] = total_turnover
-                two_market_amount = (to_float(sh_amount) or 0) + (to_float(sz_amount) or 0)
-                if total_turnover and two_market_amount:
-                    result["turnover_ratio"] = total_turnover / two_market_amount
                 result["available"] = True
                 return result
     dc_payload = _fetch_northbound_dc()
@@ -445,9 +484,6 @@ def _fetch_northbound_payload(sh_amount: Optional[float], sz_amount: Optional[fl
         result["sh_connect_turnover"] = dc_payload["sh_connect_turnover"]
         result["sz_connect_turnover"] = dc_payload["sz_connect_turnover"]
         result["total_turnover"] = dc_payload["total_turnover"]
-        two_market_amount = (to_float(sh_amount) or 0) + (to_float(sz_amount) or 0)
-        if dc_payload["total_turnover"] and two_market_amount:
-            result["turnover_ratio"] = dc_payload["total_turnover"] / two_market_amount
         result["available"] = True
         result["source"] = dc_payload["source"]
         return result
@@ -455,8 +491,19 @@ def _fetch_northbound_payload(sh_amount: Optional[float], sz_amount: Optional[fl
     return result
 
 
+def _with_northbound_turnover_ratio(payload: Dict[str, Any], sh_amount: Optional[float], sz_amount: Optional[float]) -> Dict[str, Any]:
+    result = dict(payload or {})
+    total_turnover = to_float(result.get("total_turnover"))
+    two_market_amount = (to_float(sh_amount) or 0) + (to_float(sz_amount) or 0)
+    result["turnover_ratio"] = None
+    if total_turnover and two_market_amount:
+        result["turnover_ratio"] = total_turnover / two_market_amount
+    return result
+
+
 def load_or_fetch_northbound(data_date: str, sh_amount: Optional[float], sz_amount: Optional[float]) -> Dict[str, Any]:
-    return _load_or_fetch_build(_build_filename("fundflow_northbound", data_date), lambda: _fetch_northbound_payload(sh_amount, sz_amount))
+    payload = _load_or_fetch_build(_build_filename("fundflow_northbound", data_date), lambda: _fetch_northbound_payload(sh_amount, sz_amount))
+    return _with_northbound_turnover_ratio(payload, sh_amount, sz_amount)
 
 
 def compute_style_proxy(sw_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

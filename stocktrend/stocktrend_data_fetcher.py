@@ -41,7 +41,14 @@ from common.storage import write_json
 from stocktrend.stocktrend_static_data import HK_BASE_DATA
 
 
-ak = get_akshare()
+_AKSHARE_CLIENT: Optional[Any] = None
+
+
+def _get_akshare_client() -> Any:
+    global _AKSHARE_CLIENT
+    if _AKSHARE_CLIENT is None:
+        _AKSHARE_CLIENT = get_akshare()
+    return _AKSHARE_CLIENT
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -352,6 +359,7 @@ def _fetch_spot_rows_direct(codes: List[str], market: str) -> List[Dict[str, Any
 
 
 def _fetch_hist_rows_direct(market: str, code: str, start: str, end: str) -> List[Dict[str, Any]]:
+    ak = _get_akshare_client()
     if market == "ashare":
         symbol = f"{'sh' if code.startswith('6') else 'sz'}{code}"
         df = _safe_ak_call(f"{code} A股历史行情", ak.stock_zh_a_daily, symbol=symbol)
@@ -520,6 +528,7 @@ def _load_aggregate_by_code(filename: str, codes: List[str], label: str, loader:
 
 def _fetch_ashare_dividends(code: str, trade_date: str) -> Dict[str, Any]:
     def loader(stock_code: str) -> Dict[str, Any]:
+        ak = _get_akshare_client()
         df = _safe_ak_call(f"{stock_code} A股分红", ak.stock_fhps_detail_em, symbol=stock_code)
         if df is None or df.empty:
             return _build_result_payload("东方财富 A股分红", trade_date, issue="公开接口返回空数据", div5=[], div_years=[])
@@ -545,6 +554,7 @@ def _fetch_ashare_dividends(code: str, trade_date: str) -> Dict[str, Any]:
 
 def _fetch_hk_financial_indicator(code: str, trade_date: str) -> Dict[str, Any]:
     def loader(stock_code: str) -> Dict[str, Any]:
+        ak = _get_akshare_client()
         df = _safe_ak_call(f"{stock_code} 港股核心指标", ak.stock_hk_financial_indicator_em, symbol=stock_code)
         if df is None or df.empty:
             return _build_result_payload("东方财富 港股核心指标", trade_date, issue="公开接口返回空数据")
@@ -573,6 +583,7 @@ def _fetch_hk_financial_indicator(code: str, trade_date: str) -> Dict[str, Any]:
 
 def _fetch_hk_financial_analysis(code: str, trade_date: str) -> Dict[str, Any]:
     def loader(stock_code: str) -> Dict[str, Any]:
+        ak = _get_akshare_client()
         analysis_fn = getattr(ak, "stock_financial_hk_analysis_indicator_em", None)
         if analysis_fn is None:
             return _build_result_payload("东方财富 港股财务分析", trade_date, issue="AKShare 未提供港股财务分析接口")
@@ -603,6 +614,7 @@ def _fetch_hk_financial_analysis(code: str, trade_date: str) -> Dict[str, Any]:
 
 def _fetch_hk_dividends(code: str, trade_date: str) -> Dict[str, Any]:
     def loader(stock_code: str) -> Dict[str, Any]:
+        ak = _get_akshare_client()
         dividend_fn = getattr(ak, "stock_hk_dividend_payout_em", None)
         if dividend_fn is None:
             return _build_result_payload("东方财富 港股分红派息", trade_date, issue="AKShare 未提供港股分红接口", div5=[], div_years=[])
@@ -644,6 +656,7 @@ def _fetch_stock_connect_holdings(codes: List[str], trade_date: str, market_key:
         "summary": {"requested": len(codes), "success": 0, "failed": 0},
         "error_reasons": [],
     }
+    ak = _get_akshare_client()
     holding_fn = getattr(ak, "stock_hsgt_individual_em", None)
     if holding_fn is None:
         payload["summary"]["failed"] = len(codes)
@@ -701,6 +714,7 @@ def _fetch_stock_connect_holdings(codes: List[str], trade_date: str, market_key:
 def _fetch_ashare_financial_snapshot(code: str, trade_date: str) -> Dict[str, Any]:
     def loader(stock_code: str) -> Dict[str, Any]:
         symbol = f"{stock_code}.SH" if stock_code.startswith("6") else f"{stock_code}.SZ"
+        ak = _get_akshare_client()
         analysis_fn = getattr(ak, "stock_financial_analysis_indicator_em", None)
         if analysis_fn is None:
             return _build_result_payload("东方财富 A股财务分析", trade_date, issue="AKShare 未提供 A股财务分析接口")

@@ -12,13 +12,14 @@ from common.storage import default_data_dir
 from common.storage import default_site_dir
 from common.storage import read_json
 from fundflow.fundflow_main import build_fundflow_report
-from stocktrend.stocktrend_data_fetcher import collect_pages
-from stocktrend.stocktrend_data_fetcher import write_page_jsons
-from stocktrend.stocktrend_ui_renderer import render_page
-from stocktrend.stocktrend_ui_renderer import write_html
 
 
 def build_stocktrend_report(data_date: str | None = None, out_dir: str | None = None, market: str = "all") -> Dict:
+    from stocktrend.stocktrend_data_fetcher import collect_pages
+    from stocktrend.stocktrend_data_fetcher import write_page_jsons
+    from stocktrend.stocktrend_ui_renderer import render_page
+    from stocktrend.stocktrend_ui_renderer import write_html
+
     data_dir = out_dir or default_data_dir()
     site_dir = default_site_dir()
     os.makedirs(data_dir, exist_ok=True)
