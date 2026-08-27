@@ -201,6 +201,7 @@ def _render_page_script() -> str:
     return """<script>
 (function () {
   let syncingFromHistory = false;
+  const nav = document.querySelector('.site-nav');
 
   function getModalToggles() {
     return Array.from(document.querySelectorAll('.modal-toggle'));
@@ -210,6 +211,11 @@ def _render_page_script() -> str:
     return getModalToggles().find(function (toggle) { return toggle.checked; }) || null;
   }
 
+  function syncBottomNav() {
+    if (!nav) return;
+    nav.classList.toggle('is-locked-hidden', !!getOpenToggle());
+  }
+
   function applyModalState(state) {
     const modalId = state && state.stocktrendModalId ? state.stocktrendModalId : '';
     syncingFromHistory = true;
@@ -217,6 +223,7 @@ def _render_page_script() -> str:
       toggle.checked = modalId !== '' && toggle.id === modalId;
     });
     syncingFromHistory = false;
+    syncBottomNav();
   }
 
   document.addEventListener('click', function (event) {
@@ -251,12 +258,16 @@ def _render_page_script() -> str:
       if (!history.state || history.state.stocktrendModalId !== toggle.id) {
         history.pushState({ stocktrendModalId: toggle.id }, '', window.location.href);
       }
+      syncBottomNav();
       return;
     }
 
     if (history.state && history.state.stocktrendModalId === toggle.id) {
       history.back();
+      return;
     }
+
+    syncBottomNav();
   });
 
   window.addEventListener('popstate', function (event) {
@@ -375,12 +386,12 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
           <div class="scorebasis">{basis_text}</div>
         </div>
         <div class="modal-anchor-nav">
-          <a href="#{section_prefix}-snapshot">行情</a>
-          <a href="#{section_prefix}-valuation">估值</a>
-          <a href="#{section_prefix}-capital">资金</a>
-          <a href="#{section_prefix}-finance">财务</a>
-          <a href="#{section_prefix}-risk">风险</a>
-          <a href="#{section_prefix}-summary">总结</a>
+          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-snapshot">行情</button>
+          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-valuation">估值</button>
+          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-capital">资金</button>
+          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-finance">财务</button>
+          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-risk">风险</button>
+          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-summary">总结</button>
         </div>
         <div class="module" id="{section_prefix}-snapshot">
           <h2><span class="num">1</span>行情快照</h2>

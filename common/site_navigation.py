@@ -46,6 +46,11 @@ html, body {
   opacity: 0;
   pointer-events: none;
 }
+.site-nav.is-locked-hidden {
+  transform: translateX(-50%) translateY(calc(100% + 28px));
+  opacity: 0;
+  pointer-events: none;
+}
 .site-nav-item {
   display: block;
   padding: 10px 8px;
