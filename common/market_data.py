@@ -38,6 +38,8 @@ DC_HEADERS = {
 }
 
 REQUEST_DELAY = float(os.environ.get("REQ_DELAY", "0.35"))
+REQUEST_DELAY_EM = float(os.environ.get("REQ_DELAY_EM", str(REQUEST_DELAY)))
+REQUEST_DELAY_DEFAULT_HOST = float(os.environ.get("REQ_DELAY_DEFAULT_HOST", str(REQUEST_DELAY)))
 HTTP_BACKOFF = float(os.environ.get("REQUEST_RETRY_BACKOFF", "1.6"))
 AK_RETRIES = int(os.environ.get("AKSHARE_RETRIES", "3"))
 AK_BACKOFF = float(os.environ.get("AKSHARE_RETRY_BACKOFF", "1.8"))
@@ -45,6 +47,7 @@ FUND_FLOW_BATCH_SIZE = int(os.environ.get("FUND_FLOW_BATCH_SIZE", "400"))
 FUND_FLOW_BATCH_HOST = os.environ.get("FUND_FLOW_BATCH_HOST", "https://push2delay.eastmoney.com")
 
 REQUEST_COUNT = {"n": 0}
+HOST_LAST_REQUEST_TS: Dict[str, float] = {}
 
 
 def reset_request_count() -> None:
@@ -63,6 +66,29 @@ def _sleep(delay: Optional[float] = None) -> None:
     actual_delay = REQUEST_DELAY if delay is None else delay
     if actual_delay > 0:
         time.sleep(actual_delay)
+
+
+def _host_delay(url: Optional[str]) -> float:
+    if not url:
+        return REQUEST_DELAY_DEFAULT_HOST
+    host = urllib.parse.urlparse(url).netloc.lower()
+    if "eastmoney.com" in host:
+        return REQUEST_DELAY_EM
+    return REQUEST_DELAY_DEFAULT_HOST
+
+
+def _sleep_for_host(url: Optional[str]) -> None:
+    host = urllib.parse.urlparse(url).netloc.lower() if url else "default"
+    min_delay = _host_delay(url)
+    if min_delay <= 0:
+        HOST_LAST_REQUEST_TS[host] = time.time()
+        return
+    last_ts = HOST_LAST_REQUEST_TS.get(host)
+    if last_ts is not None:
+        elapsed = time.time() - last_ts
+        if elapsed < min_delay:
+            time.sleep(min_delay - elapsed)
+    HOST_LAST_REQUEST_TS[host] = time.time()
 
 
 def get_akshare() -> Any:
@@ -96,7 +122,7 @@ def http_get(url: str, headers: Dict[str, str], timeout: int = 15, retries: int 
     retry_backoff = HTTP_BACKOFF if backoff is None else backoff
     for attempt in range(retries):
         _count_external_request()
-        _sleep()
+        _sleep_for_host(url)
         try:
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=timeout) as response:

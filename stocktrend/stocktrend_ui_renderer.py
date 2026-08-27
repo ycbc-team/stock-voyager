@@ -9,8 +9,8 @@ stocktrend UI 渲染脚本
   2. 基于独立 CSS 模板生成两个静态页面
 
 默认产物：
-  - build/stocktrend_ashare.html
-  - build/stocktrend_hk.html
+  - build/site/stocktrend_ashare.html
+  - build/site/stocktrend_hk.html
 """
 from __future__ import annotations
 
@@ -25,6 +25,8 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+from common.storage import default_data_dir
+from common.storage import default_site_dir
 from common.site_navigation import render_site_nav
 from common.site_navigation import site_nav_css
 
@@ -35,10 +37,12 @@ SIGNAL_COLOR = ["#3fb950", "#d29922", "#f85149"]
 CONCL_CLASS = ["ok", "mid", "wait"]
 
 
-def default_build_dir() -> str:
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    root_dir = os.path.dirname(script_dir)
-    return os.path.join(root_dir, "build")
+def default_input_dir() -> str:
+    return default_data_dir()
+
+
+def default_output_dir() -> str:
+    return default_site_dir()
 
 
 def _load_css() -> str:
@@ -166,6 +170,13 @@ def _render_dividend_table(stock: Dict[str, Any], currency_unit: str) -> str:
 </table>'''
 
 
+def _render_issue_notes(issues: List[str]) -> str:
+    valid = [str(item).strip() for item in issues if str(item or "").strip()]
+    if not valid:
+        return ""
+    return "".join(f'<div class="note">数据提示：{item}</div>' for item in valid)
+
+
 def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
     meta_map = {
         "ashare": {
@@ -181,7 +192,7 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
             "code_suffix": f"{stock['code']}.HK",
             "flow_line": f"成交额：{_fmt_amount(stock.get('amount'))}",
             "holding_line": f"南向持股：{_fmt_pct(_to_float(stock.get('south')))}",
-            "holding_shares": "南向股数：—",
+            "holding_shares": f"南向股数：{_fmt_shares(_to_float(stock.get('south_shares')))}",
             "badge": "港股收盘口径",
         },
     }
@@ -197,6 +208,9 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
     margin_text = "—" if stock.get("margin") is None else f"{stock['margin']:.2f}%"
     liab_text = "—" if stock.get("liab") is None else f"{stock['liab']:.2f}%"
     div_text = "—" if stock.get("div") is None else f"{stock['div']:.2f}%"
+    financial_period = str(stock.get("financial_report_year") or "—")
+    holding_date = str(stock.get("north_date") or stock.get("south_date") or "—")
+    history_date = str(stock.get("history_as_of") or "—")
     return f'''<div class="modal-overlay">
     <label class="modal-backdrop" for="{modal_id}"></label>
     <div class="modal">
@@ -248,6 +262,7 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
             {_render_kv("持股数量", market_meta["holding_shares"])}
             {_render_kv("成交额", _fmt_amount(stock.get("amount")))}
           </div>
+          {_render_issue_notes(stock.get("data_issues") or [])}
         </div>
         <div class="module">
           <h2><span class="num">4</span>财务与分红</h2>
@@ -256,6 +271,12 @@ def _render_modal(stock: Dict[str, Any], market_code: str) -> str:
             {_render_kv("毛利率", margin_text)}
             {_render_kv("资产负债率", liab_text)}
             {_render_kv("股息率", div_text)}
+          </div>
+          <div class="kv">
+            {_render_kv("财报年度", financial_period)}
+            {_render_kv("持股日期", holding_date)}
+            {_render_kv("行情日期", history_date)}
+            {_render_kv("分红年度", " / ".join(str(year) for year in (stock.get("div_years") or [])) or "—")}
           </div>
           {_render_dividend_table(stock, market_meta["currency_unit"])}
         </div>
@@ -373,6 +394,8 @@ def render_page(data: Dict[str, Any]) -> str:
 <div class="databadge">{meta.get("databadge", "")}</div>
 '''
     )
+    for warning in meta.get("fetch_warnings") or []:
+        html.append(f'<div class="databadge">⚠️ 数据抓取提示：{warning}</div>\n')
     sector_class_map = {
         "consumer": "consumer",
         "healthcare": "finance",
@@ -408,7 +431,8 @@ def render_page(data: Dict[str, Any]) -> str:
 
 def load_result(path: str) -> Dict[str, Any]:
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        payload = json.load(f)
+    return payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
 
 
 def write_html(path: str, html: str) -> None:
@@ -423,16 +447,20 @@ def _derive_output(input_path: str) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="stocktrend UI 渲染脚本：基于 JSON 中间产物输出静态 HTML")
-    ap.add_argument("--input", action="append", help="输入 JSON 路径；可重复传入多个。默认渲染 build/stocktrend_ashare.json 与 build/stocktrend_hk.json")
+    ap.add_argument("--input", action="append", help="输入 JSON 路径；可重复传入多个。默认渲染 build/data/stocktrend_ashare.json 与 build/data/stocktrend_hk.json")
     ap.add_argument("--output", action="append", help="输出 HTML 路径；与 --input 一一对应")
     args = ap.parse_args()
 
-    build_dir = default_build_dir()
+    input_dir = default_input_dir()
+    output_dir = default_output_dir()
     inputs = args.input or [
-        os.path.join(build_dir, "stocktrend_ashare.json"),
-        os.path.join(build_dir, "stocktrend_hk.json"),
+        os.path.join(input_dir, "stocktrend_ashare.json"),
+        os.path.join(input_dir, "stocktrend_hk.json"),
     ]
-    outputs = args.output or []
+    outputs = args.output or [
+        os.path.join(output_dir, "stocktrend_ashare.html"),
+        os.path.join(output_dir, "stocktrend_hk.html"),
+    ]
 
     written: List[str] = []
     for idx, input_path in enumerate(inputs):
@@ -442,6 +470,7 @@ def main() -> None:
         output_path = outputs[idx] if idx < len(outputs) else _derive_output(input_path)
         data = load_result(input_path)
         html = render_page(data)
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         write_html(output_path, html)
         written.append(output_path)
 

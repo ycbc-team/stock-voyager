@@ -14,7 +14,8 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 
-from common.storage import default_build_dir
+from common.storage import default_data_dir
+from common.storage import default_site_dir
 from common.storage import read_json
 from fundflow.fundflow_data_fetcher import collect_report_data
 from fundflow.fundflow_data_fetcher import write_report_json
@@ -22,20 +23,23 @@ from fundflow.fundflow_ui_renderer import write_html
 
 
 def build_fundflow_report(data_date: str | None = None, out_dir: str | None = None, topn: int = 10, verbose: bool = True) -> Dict:
-    target_dir = out_dir or default_build_dir()
-    os.makedirs(target_dir, exist_ok=True)
+    data_dir = out_dir or default_data_dir()
+    site_dir = default_site_dir()
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(site_dir, exist_ok=True)
 
     result = collect_report_data(data_date=data_date, topn=topn, verbose=verbose)
-    json_path = write_report_json(result, out_dir=target_dir)
-    html_path = os.path.join(target_dir, "fundflow.html")
-    write_html(html_path, read_json(json_path))
+    json_path = write_report_json(result, out_dir=data_dir)
+    html_path = os.path.join(site_dir, "fundflow.html")
+    payload = read_json(json_path)
+    write_html(html_path, payload.get("data") if isinstance(payload, dict) and "data" in payload else payload)
     return {"json_path": json_path, "html_path": html_path, "result": result}
 
 
 def main() -> Dict:
-    parser = argparse.ArgumentParser(description="fundflow 页面总控：生成 build/fundflow.json 与 build/fundflow.html")
+    parser = argparse.ArgumentParser(description="fundflow 页面总控：生成 build/data/fundflow.json 与 build/site/fundflow.html")
     parser.add_argument("--date", help="数据日期 YYYY-MM-DD（默认取最近交易日）")
-    parser.add_argument("--out", help="输出目录（默认 <项目根>/build）")
+    parser.add_argument("--out", help="页面 JSON 输出目录（默认 <项目根>/build/data）")
     parser.add_argument("--topn", type=int, default=10, help="个股资金流 TOP 数量")
     args = parser.parse_args()
 

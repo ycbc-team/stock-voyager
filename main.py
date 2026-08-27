@@ -8,7 +8,8 @@ import os
 from typing import Dict
 
 from common.site_navigation import render_site_index
-from common.storage import default_build_dir
+from common.storage import default_data_dir
+from common.storage import default_site_dir
 from common.storage import read_json
 from fundflow.fundflow_main import build_fundflow_report
 from stocktrend.stocktrend_data_fetcher import collect_pages
@@ -18,23 +19,27 @@ from stocktrend.stocktrend_ui_renderer import write_html
 
 
 def build_stocktrend_report(data_date: str | None = None, out_dir: str | None = None, market: str = "all") -> Dict:
-    target_dir = out_dir or default_build_dir()
-    os.makedirs(target_dir, exist_ok=True)
+    data_dir = out_dir or default_data_dir()
+    site_dir = default_site_dir()
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(site_dir, exist_ok=True)
 
     pages = collect_pages(data_date=data_date, market=market)
-    json_paths = write_page_jsons(pages, out_dir=target_dir)
+    json_paths = write_page_jsons(pages, out_dir=data_dir)
 
     html_paths = []
     for json_path in json_paths:
         payload = read_json(json_path)
-        html_path = os.path.splitext(json_path)[0] + ".html"
-        write_html(html_path, render_page(payload))
+        page_data = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+        html_name = os.path.splitext(os.path.basename(json_path))[0] + ".html"
+        html_path = os.path.join(site_dir, html_name)
+        write_html(html_path, render_page(page_data))
         html_paths.append(html_path)
     return {"json_paths": json_paths, "html_paths": html_paths, "pages": pages}
 
 
 def build_site_index(fundflow_result: Dict, stocktrend_result: Dict, out_dir: str | None = None) -> str:
-    target_dir = out_dir or default_build_dir()
+    target_dir = out_dir or default_site_dir()
     os.makedirs(target_dir, exist_ok=True)
 
     trade_date = fundflow_result.get("result", {}).get("data_date") or "最新交易日"
@@ -80,14 +85,14 @@ def build_site_index(fundflow_result: Dict, stocktrend_result: Dict, out_dir: st
 def main() -> Dict:
     parser = argparse.ArgumentParser(description="统一构建 fundflow 与 stocktrend 页面")
     parser.add_argument("--date", help="交易日 YYYY-MM-DD（默认取最近交易日）")
-    parser.add_argument("--out", help="输出目录（默认 <项目根>/build）")
+    parser.add_argument("--out", help="页面 JSON 输出目录（默认 <项目根>/build/data）")
     parser.add_argument("--topn", type=int, default=10, help="fundflow 个股资金流 TOP 数量")
     parser.add_argument("--stocktrend-market", choices=["all", "ashare", "hk"], default="all", help="stocktrend 输出市场")
     args = parser.parse_args()
 
     fundflow_result = build_fundflow_report(data_date=args.date, out_dir=args.out, topn=args.topn, verbose=True)
     stocktrend_result = build_stocktrend_report(data_date=args.date, out_dir=args.out, market=args.stocktrend_market)
-    index_path = build_site_index(fundflow_result, stocktrend_result, out_dir=args.out)
+    index_path = build_site_index(fundflow_result, stocktrend_result)
 
     print("\n[✓] 页面产物已写出：")
     print(f"    site index : {index_path}")

@@ -1,6 +1,6 @@
 # Agent.md — fundflow 模块
 
-A 股收盘资金流数据抓取 + 静态网页报告生成模块。当前采用“数据生产 / UI 渲染 / 主脚本编排”三段式结构，独立于仓库根目录的港股页面模板（build.py / data.json / index.html），只关注资金流动跟踪。
+A 股收盘资金流数据抓取 + 静态网页报告生成模块。当前采用“数据生产 / UI 渲染 / 主脚本编排”三段式结构，只关注资金流动跟踪。
 
 ## 一、项目简介
 
@@ -17,7 +17,10 @@ A 股收盘资金流数据抓取 + 静态网页报告生成模块。当前采用
   - 申万成分股：`AKShare.index_component_sw(symbol=行业代码)`，结果缓存到 `common/cache/sw_stock_map.json`
   - 个股资金流排行：`AKShare.stock_individual_fund_flow_rank(indicator="今日")`
   - 主要指数 / 国证风格 / 两市成交额 / 北向成交额：东方财富公开接口，指数回退腾讯 gtimg
-- **缓存策略**：长期稳定数据统一放在 `common/cache/`；每天会变的数据统一写到项目根 `build/`，供 `fundflow` / `stocktrend` 复用。
+- **缓存策略**：长期稳定数据统一放在 `common/cache/`；每天会变的数据拆到 `build/cache/`，页面 JSON 进入 `build/data/`，最终 HTML 进入 `build/site/`。
+- **长期缓存语义**：
+  - `sw_mapping.json` 属于参考常量，默认不按时间过期。
+  - `sw_stock_map.json` 属于长期稳定但可能增量变化的数据，默认也不按时间过期；当发现当日股票列表里存在未映射代码时，自动重新抓取申万成分股并补齐新股。
 - **请求策略**：所有外部调用前统一遵守 `REQ_DELAY` 节流；优先复用单次全市场排行结果，不额外重复请求个股 TOP。
 
 ## 二、目录结构
@@ -40,12 +43,15 @@ fundflow/
 
 ```
 build/
-├── fundflow.json
-├── fundflow.html
-├── fundflow_market_snapshot_<date>.json
-├── fundflow_sw_index_spot_<date>.json
-├── fundflow_northbound_<date>.json
-└── stock_fundflow_today_full_<date>.json
+├── site/
+│   └── fundflow.html
+├── data/
+│   └── fundflow.json
+└── cache/
+    ├── fundflow_market_snapshot_<date>.json
+    ├── fundflow_sw_index_spot_<date>.json
+    ├── fundflow_northbound_<date>.json
+    └── stock_fundflow_today_full_<date>.json
 ```
 
 ## 三、构建 / 运行命令
@@ -56,7 +62,7 @@ cd fundflow
 
 # 1) 日常构建（默认）：主脚本先产出 JSON，再渲染 HTML
 ../.venv/bin/python fundflow_main.py
-# → 产物：build/fundflow.json + build/fundflow.html
+# → 产物：build/data/fundflow.json + build/site/fundflow.html
 
 # 2) 指定数据日期
 ../.venv/bin/python fundflow_main.py --date 2026-08-25
@@ -68,7 +74,7 @@ cd fundflow
 ../.venv/bin/python fundflow_data_fetcher.py
 
 # 5) 基于已生成 JSON 单独做 HTML 渲染
-../.venv/bin/python fundflow_ui_renderer.py --input ../build/fundflow.json --output ../build/fundflow.html
+../.venv/bin/python fundflow_ui_renderer.py --input ../build/data/fundflow.json --output ../build/site/fundflow.html
 ```
 
 **限速与请求量**：
@@ -77,8 +83,8 @@ cd fundflow
 - 个股资金流 TOP 直接复用全市场资金流排行结果，不再为 TOP 单独发请求。
 
 **关键点**：
-- 文件名**固定无日期**，每天运行覆盖前一天；打开/刷新 `build/fundflow.html` 即见最新报告。
-- 主脚本固定产出 `build/fundflow.json` + `build/fundflow.html`，不再输出 CSV。
+- 页面级文件名固定无日期；打开/刷新 `build/site/fundflow.html` 即见最新报告。
+- 主脚本固定产出 `build/data/fundflow.json` + `build/site/fundflow.html`，不再输出 CSV。
 - 偶发接口超时调优：`EM_TIMEOUT=8 EM_RETRIES=2 ../.venv/bin/python fundflow_main.py`
 - `report.css` 必须与脚本同目录（脚本按自身位置加载并内联），移动时两者一起搬。
 
@@ -96,20 +102,20 @@ cd fundflow
 
 1. 判断当日是否为交易日（脚本 `detect_trade_date()` 已处理，也可直接 `--date` 指定）。
 2. 运行 `../.venv/bin/python fundflow_main.py`（收盘 15:00 后）。
-3. 校验输出：`build/fundflow.json` 与 `build/fundflow.html` 生成成功、头部数据日期正确、无「数据暂缺」大面积出现（本机网络正常时）。
+3. 校验输出：`build/data/fundflow.json` 与 `build/site/fundflow.html` 生成成功、头部数据日期正确、无「数据暂缺」大面积出现（本机网络正常时）。
 4. 若 AKShare 相关接口暂不可用，优先检查 `.venv` / `requirements.txt` / 外网访问与 `common/cache/` 中静态映射是否有效。
-5. 如需对外分享，直接给 `build/fundflow.html` 文件本身（单文件自包含）。
+5. 如需对外分享，直接给 `build/site/fundflow.html` 文件本身（单文件自包含）。
 
 ## 六、自动部署（GitHub Actions + Pages）
 
 `.github/workflows/ashare-report.yml`：每个交易日 15:45（北京时间）自动运行脚本并部署 GitHub Pages。
 
 - 触发：`schedule`（周一至五 07:45 UTC）+ `workflow_dispatch`（手动）
-- 流程：`python3 main.py`（统一生成 `fundflow` + `stocktrend` 页面）→ `build/fundflow.html` 复制为站点根 `index.html` → upload-pages-artifact → deploy-pages
+- 流程：`python3 main.py`（统一生成导航首页 + `fundflow` + `stocktrend` 页面）→ 上传 `build/site/` → deploy-pages
 - 一次性配置：仓库 **Settings → Pages → Source 选「GitHub Actions」**
-- 站点：`https://<owner>.github.io/<repo>/`（根路径即最新报告）
+- 站点：`https://<owner>.github.io/<repo>/`（根路径即导航首页）
 
 ## 七、补充说明
 
-- `stocktrend` 若发现 `build/stock_fundflow_today_full_<date>.json` 已存在，会直接复用，不会重复请求同一批资金流数据。
+- `stocktrend` 若发现 `build/cache/stock_fundflow_today_full_<date>.json` 已存在，会直接复用，不会重复请求同一批资金流数据。
 - `fundflow_data_fetcher.py` 与 `stocktrend_data_fetcher.py` 都只输出 JSON，不再带 `fmt/csv` 参数。

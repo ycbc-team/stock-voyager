@@ -6,8 +6,8 @@ A股收盘数据生产脚本
 
 职责：
   1. 抓取 A 股收盘核心数据
-  2. 每个请求模块单独写出 JSON 到 build/
-  3. 汇总生成 build/fundflow.json
+  2. 每个请求模块单独写出 JSON 到 build/cache/
+  3. 汇总生成 build/data/fundflow.json
 """
 from __future__ import annotations
 
@@ -37,11 +37,12 @@ from common.market_data import http_get
 from common.market_data import load_or_fetch_stock_fundflow_build
 from common.market_data import reset_request_count
 from common.market_data import to_float
-from common.storage import default_build_dir
+from common.storage import default_data_dir
 from common.storage import load_build_json
 from common.storage import load_cache_json
 from common.storage import save_build_json
 from common.storage import save_cache_json
+from common.storage import save_data_json
 from common.storage import write_json
 
 
@@ -84,7 +85,7 @@ STYLE_PROXY = {
 SOURCE_EM = "东方财富 East Money 公开行情接口（与证券时报·数据宝同源）"
 SOURCE_GT = "腾讯财经 gtimg 接口（回退源）"
 SOURCE_SW = "AKShare 申万一级指数 + 东方财富个股资金流聚合"
-STATIC_CACHE_TTL_HOURS = int(os.environ.get("FUND_STATIC_CACHE_TTL_HOURS", str(24 * 180)))
+STATIC_CACHE_SCHEMA_VERSION = 1
 
 
 def _pick_amount(row: Dict[str, Any], *fields: str) -> Optional[float]:
@@ -95,12 +96,21 @@ def _pick_amount(row: Dict[str, Any], *fields: str) -> Optional[float]:
     return None
 
 
-def _load_or_fetch_static_cache(filename: str, loader, max_age_hours: int = STATIC_CACHE_TTL_HOURS):
-    cached = load_cache_json(filename, max_age_hours=max_age_hours)
+def _load_or_fetch_static_cache(filename: str, loader, *, source: str, refresh_policy: str):
+    cached = load_cache_json(filename)
     if cached is not None:
         return cached, "common/cache"
     payload = loader()
-    save_cache_json(filename, payload)
+    save_cache_json(
+        filename,
+        payload,
+        source=source,
+        ttl_hours=None,
+        tags={
+            "cache_version": STATIC_CACHE_SCHEMA_VERSION,
+            "refresh_policy": refresh_policy,
+        },
+    )
     return payload, "fresh"
 
 
@@ -220,12 +230,18 @@ def _fetch_sw_mapping_payload() -> Dict[str, Any]:
     by_code = {code: {"code": code, "name": name} for code, name in SW_INDUSTRY.items()}
     return {
         "by_code": by_code,
+        "mutable": False,
         "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
 def fetch_sw_mapping() -> Tuple[Dict[str, Any], str]:
-    payload, source = _load_or_fetch_static_cache("sw_mapping.json", _fetch_sw_mapping_payload)
+    payload, source = _load_or_fetch_static_cache(
+        "sw_mapping.json",
+        _fetch_sw_mapping_payload,
+        source="内置申万一级常量映射",
+        refresh_policy="immutable_reference_data",
+    )
     source_text = "common/cache" if source == "common/cache" else "内置申万一级常量"
     return payload, source_text
 
@@ -233,28 +249,55 @@ def fetch_sw_mapping() -> Tuple[Dict[str, Any], str]:
 def _fetch_sw_stock_map_payload() -> Dict[str, Any]:
     ak = get_akshare()
     stock_to_industry: Dict[str, str] = {}
+    industry_sizes: Dict[str, int] = {}
     for code in SW_INDUSTRY:
         try:
             df = call_akshare_with_retry(f"申万成分股 {code}", ak.index_component_sw, symbol=code)
         except Exception:
             continue
+        count = 0
         for row in df.to_dict("records"):
             stock_code = str(row.get("证券代码") or "").zfill(6)
             if stock_code:
                 stock_to_industry[stock_code] = code
+                count += 1
+        industry_sizes[code] = count
     return {
         "stock_to_industry": stock_to_industry,
+        "industry_sizes": industry_sizes,
+        "mutable": True,
         "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
-def fetch_sw_stock_map() -> Tuple[Dict[str, str], str]:
-    cached = load_cache_json("sw_stock_map.json", max_age_hours=STATIC_CACHE_TTL_HOURS)
-    if cached and cached.get("stock_to_industry"):
-        return cached["stock_to_industry"], "common/cache"
+def fetch_sw_stock_map(required_codes: Optional[List[str]] = None) -> Tuple[Dict[str, str], str]:
+    cached = load_cache_json("sw_stock_map.json")
+    cached_map = (cached or {}).get("stock_to_industry") or {}
+    required = {str(code).zfill(6) for code in (required_codes or []) if code}
+    missing_codes = sorted(code for code in required if code not in cached_map)
+    if cached_map and not missing_codes:
+        return cached_map, "common/cache"
+
+    refresh_reason = "cold_start"
+    if cached_map and missing_codes:
+        refresh_reason = f"missing_codes:{','.join(missing_codes[:20])}"
     payload = _fetch_sw_stock_map_payload()
-    save_cache_json("sw_stock_map.json", payload)
-    return payload["stock_to_industry"], "AKShare 申万成分股"
+    save_cache_json(
+        "sw_stock_map.json",
+        payload,
+        source="AKShare 申万成分股",
+        ttl_hours=None,
+        tags={
+            "cache_version": STATIC_CACHE_SCHEMA_VERSION,
+            "refresh_policy": "refresh_when_required_codes_are_missing",
+            "refresh_reason": refresh_reason,
+            "missing_codes_refreshed": missing_codes,
+        },
+    )
+    source = "AKShare 申万成分股"
+    if missing_codes:
+        source += f"（检测到 {len(missing_codes)} 只未映射股票，已自动刷新）"
+    return payload["stock_to_industry"], source
 
 
 def _fetch_sw_index_spot_payload() -> Dict[str, Any]:
@@ -442,9 +485,22 @@ def compute_hotspots(sw_list: List[Dict[str, Any]], topn: int = 5) -> Dict[str, 
     return {"hot": valid[:topn], "weak": valid[-topn:][::-1]}
 
 
+def _dedupe_texts(items: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
 def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose: bool = True) -> Dict[str, Any]:
     reset_request_count()
     resolved_date = data_date or detect_trade_date()
+    fetch_warnings: List[str] = []
     if verbose:
         print(f"[*] 数据日期: {resolved_date}")
 
@@ -461,10 +517,6 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
     if verbose:
         print(f"[+] 申万一级映射: {len((sw_mapping or {}).get('by_code', {}))}/31 条（{sw_mapping_source}）")
 
-    stock_to_industry, stock_map_source = fetch_sw_stock_map()
-    if verbose:
-        print(f"[+] 申万成分股映射: {len(stock_to_industry)} 条股票映射（{stock_map_source}）")
-
     sw_index_spot_payload = load_or_fetch_sw_index_spot(resolved_date)
     sw_spot = sw_index_spot_payload.get("rows") or []
     sw_spot_source = sw_index_spot_payload.get("source") or "申万一级指数接口暂不可用"
@@ -473,20 +525,31 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
 
     stock_rows, stock_rows_source, stock_rows_artifact = load_or_fetch_stock_fundflow_build(
         resolved_date,
-        stock_codes=stock_to_industry.keys(),
         scope="full",
     )
     if verbose:
         print(f"[+] 个股资金流全市场: {len(stock_rows)} 条（{stock_rows_source}）")
 
+    stock_codes_today = [str(row.get("code") or "").zfill(6) for row in stock_rows if row.get("code")]
+    stock_to_industry, stock_map_source = fetch_sw_stock_map(required_codes=stock_codes_today)
+    if verbose:
+        print(f"[+] 申万成分股映射: {len(stock_to_industry)} 条股票映射（{stock_map_source}）")
+    missing_industry_codes = sorted(code for code in stock_codes_today if code not in stock_to_industry)
+    if missing_industry_codes:
+        fetch_warnings.append(f"仍有 {len(missing_industry_codes)} 只股票未匹配到申万行业，行业聚合时已跳过。")
+
     sw_list = build_sw_industry(sw_spot, stock_rows, sw_mapping, stock_to_industry)
     sw_source = f"{sw_spot_source} + {stock_rows_source}"
     if verbose:
         print(f"[+] 申万一级行业聚合: {len(sw_list)}/31 条（{sw_source}）")
+    if not sw_spot:
+        fetch_warnings.append(f"申万一级指数数据异常：{sw_spot_source}")
 
     northbound = load_or_fetch_northbound(resolved_date, sh_amount, sz_amount)
     if verbose:
         print(f"[+] 北向资金: {'可用' if northbound['available'] else '暂不可用'}（{northbound['source']}）")
+    if not northbound["available"]:
+        fetch_warnings.append(f"北向资金数据异常：{northbound['source']}")
 
     style_proxy = compute_style_proxy(sw_list)
     if verbose:
@@ -514,6 +577,7 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
         "stock_source": stock_source,
         "hotspots": hotspots,
         "request_count": get_request_count(),
+        "fetch_warnings": _dedupe_texts(fetch_warnings),
         "artifacts": {
             "market_snapshot": _build_filename("fundflow_market_snapshot", resolved_date),
             "sw_index_spot": _build_filename("fundflow_sw_index_spot", resolved_date),
@@ -524,16 +588,26 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
 
 
 def write_report_json(result: Dict[str, Any], out_dir: Optional[str] = None) -> str:
-    target_dir = out_dir or default_build_dir()
-    path = os.path.join(target_dir, "fundflow.json")
-    write_json(path, result)
-    return path
+    if out_dir:
+        path = os.path.join(out_dir, "fundflow.json")
+        payload = {
+            "_meta": {
+                "cache_scope": "page_data",
+                "source": result.get("source"),
+                "data_date": result.get("data_date"),
+                "saved_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            "data": result,
+        }
+        write_json(path, payload)
+        return path
+    return save_data_json("fundflow.json", result, source=result.get("source"), tags={"data_date": result.get("data_date")})
 
 
 def main() -> Dict[str, Any]:
-    parser = argparse.ArgumentParser(description="A股收盘数据生产脚本：按请求拆分 JSON 产物，并汇总生成 build/fundflow.json")
+    parser = argparse.ArgumentParser(description="A股收盘数据生产脚本：按请求拆分 JSON 产物，并汇总生成 build/data/fundflow.json")
     parser.add_argument("--date", help="数据日期 YYYY-MM-DD（默认取最近交易日）")
-    parser.add_argument("--out", help="输出目录（默认 <项目根>/build）")
+    parser.add_argument("--out", help="页面 JSON 输出目录（默认 <项目根>/build/data）")
     parser.add_argument("--topn", type=int, default=10, help="个股资金流 TOP 数量")
     args = parser.parse_args()
 

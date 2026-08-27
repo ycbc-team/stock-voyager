@@ -33,9 +33,10 @@ from common.market_data import detect_trade_date
 from common.market_data import get_akshare
 from common.market_data import http_get
 from common.market_data import load_or_fetch_stock_fundflow_build
-from common.storage import default_build_dir
+from common.storage import default_data_dir
 from common.storage import load_build_json
 from common.storage import save_build_json
+from common.storage import save_data_json
 from common.storage import write_json
 from stocktrend.stocktrend_static_data import HK_BASE_DATA
 
@@ -249,6 +250,63 @@ def _find_metric_by_any_keywords(row: Dict[str, Any], keyword_groups: List[List[
     return None
 
 
+def _dedupe_texts(items: List[str]) -> List[str]:
+    result: List[str] = []
+    seen = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _build_holding_warning(payload: Dict[str, Any], label: str) -> Optional[str]:
+    summary = payload.get("summary") or {}
+    requested = int(summary.get("requested") or 0)
+    failed = int(summary.get("failed") or 0)
+    success = int(summary.get("success") or 0)
+    if requested <= 0 or failed <= 0:
+        return None
+    reasons = _dedupe_texts(payload.get("error_reasons") or [])
+    reason_text = "；".join(reasons[:2])
+    if len(reasons) > 2:
+        reason_text += " 等"
+    if failed >= requested:
+        return f"{label}接口本次全部失败；失败原因：{reason_text or '公开接口返回异常'}。对应股票持股项显示“—”。"
+    return f"{label}接口本次部分失败：成功 {success} / {requested}；失败原因：{reason_text or '公开接口返回异常'}。对应失败股票持股项显示“—”。"
+
+
+def _build_issue_text(label: str, issue: Optional[str]) -> Optional[str]:
+    text = str(issue or "").strip()
+    if not text:
+        return None
+    return f"{label}异常：{text}"
+
+
+def _build_result_payload(source: str, trade_date: str, issue: Optional[str] = None, **data: Any) -> Dict[str, Any]:
+    payload = {"source": source, "as_of": trade_date}
+    if issue:
+        payload["issue"] = issue
+    payload.update(data)
+    return payload
+
+
+def _build_aggregate_warning(payload: Dict[str, Any], label: str) -> Optional[str]:
+    summary = payload.get("summary") or {}
+    requested = int(summary.get("requested") or 0)
+    failed = int(summary.get("failed") or 0)
+    success = int(summary.get("success") or 0)
+    if requested <= 0 or failed <= 0:
+        return None
+    reasons = _dedupe_texts(payload.get("error_reasons") or [])
+    reason_text = "；".join(reasons[:2]) if reasons else "公开接口返回异常"
+    if len(reasons) > 2:
+        reason_text += " 等"
+    return f"{label}存在异常：成功 {success} / {requested}；失败原因：{reason_text}。失败字段显示“—”。"
+
+
 def _fetch_spot_rows_direct(codes: List[str], market: str) -> List[Dict[str, Any]]:
     secids = []
     for code in codes:
@@ -355,15 +413,10 @@ def _load_hk_spot(trade_date: str) -> Dict[str, Dict[str, Any]]:
 
 
 def _fetch_hist_rows(market: str, code: str, trade_date: str) -> List[Dict[str, Any]]:
-    filename = f"stocktrend_hist_{market}_{code}_{trade_date}.json"
-    cached = load_build_json(filename)
-    if cached is not None:
-        return cached
-    start = (dt.datetime.strptime(trade_date, "%Y-%m-%d") - dt.timedelta(days=420)).strftime("%Y%m%d")
-    end = trade_date.replace("-", "")
-    rows = _fetch_hist_rows_direct(market, code, start, end)
-    save_build_json(filename, rows)
-    return rows
+    codes = [item["code"] for item in A_SHARE_STOCKS] if market == "ashare" else [str(item["code"]).zfill(5) for item in _load_hk_base_data()["stocks"]]
+    payload = _load_hist_cache(market, codes, trade_date)
+    item = (payload.get("items") or {}).get(code) or {}
+    return list(item.get("rows") or [])
 
 
 def _compute_hist_stats(rows: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
@@ -413,14 +466,63 @@ def _prev_close_from_hist(rows: List[Dict[str, Any]]) -> Optional[float]:
     return _to_float(rows[-2].get("收盘"))
 
 
-def _fetch_ashare_dividends(code: str, trade_date: str) -> Dict[str, Any]:
-    filename = f"stocktrend_ashare_dividend_{code}_{trade_date}.json"
+def _load_hist_cache(market: str, codes: List[str], trade_date: str) -> Dict[str, Any]:
+    filename = f"stocktrend_hist_{market}_{trade_date}.json"
     cached = load_build_json(filename)
     if cached is not None:
         return cached
-    df = _safe_ak_call(f"{code} A股分红", ak.stock_fhps_detail_em, symbol=code)
-    payload = {"div5": [], "div_years": []}
-    if df is not None and not df.empty:
+
+    start = (dt.datetime.strptime(trade_date, "%Y-%m-%d") - dt.timedelta(days=420)).strftime("%Y%m%d")
+    end = trade_date.replace("-", "")
+    items: Dict[str, Any] = {}
+    summary = {"requested": len(codes), "success": 0, "failed": 0}
+    error_reasons: List[str] = []
+    source = "AKShare 历史行情"
+
+    for code in codes:
+        rows = _fetch_hist_rows_direct(market, code, start, end)
+        issue = None if rows else "公开接口返回空数据"
+        if issue:
+            summary["failed"] += 1
+            error_reasons.append(issue)
+        else:
+            summary["success"] += 1
+        items[code] = _build_result_payload(source, trade_date, issue=issue, rows=rows)
+
+    payload = {"items": items, "summary": summary, "error_reasons": _dedupe_texts(error_reasons), "source": source}
+    save_build_json(filename, payload)
+    return payload
+
+
+def _load_aggregate_by_code(filename: str, codes: List[str], label: str, loader: Callable[[str], Dict[str, Any]], source: str, trade_date: str) -> Dict[str, Any]:
+    cached = load_build_json(filename)
+    if cached is not None:
+        return cached
+
+    items: Dict[str, Any] = {}
+    summary = {"requested": len(codes), "success": 0, "failed": 0}
+    error_reasons: List[str] = []
+    for code in codes:
+        payload = loader(code)
+        payload.setdefault("source", source)
+        payload.setdefault("as_of", trade_date)
+        issue = payload.get("issue")
+        if issue:
+            summary["failed"] += 1
+            error_reasons.append(str(issue))
+        else:
+            summary["success"] += 1
+        items[code] = payload
+    result = {"items": items, "summary": summary, "error_reasons": _dedupe_texts(error_reasons), "source": source}
+    save_build_json(filename, result)
+    return result
+
+
+def _fetch_ashare_dividends(code: str, trade_date: str) -> Dict[str, Any]:
+    def loader(stock_code: str) -> Dict[str, Any]:
+        df = _safe_ak_call(f"{stock_code} A股分红", ak.stock_fhps_detail_em, symbol=stock_code)
+        if df is None or df.empty:
+            return _build_result_payload("东方财富 A股分红", trade_date, issue="公开接口返回空数据", div5=[], div_years=[])
         rows = df.to_dict("records")
         by_year = _pick_latest_row_per_year(rows, "报告期")
         years = sorted(by_year.keys())[-5:]
@@ -428,150 +530,218 @@ def _fetch_ashare_dividends(code: str, trade_date: str) -> Dict[str, Any]:
         for year in years:
             cash_ratio = _to_float(by_year[year].get("现金分红-现金分红比例"))
             divs.append(round(cash_ratio / 10.0, 4) if cash_ratio is not None else None)
-        payload = {"div5": divs, "div_years": years}
-    save_build_json(filename, payload)
-    return payload
+        return _build_result_payload("东方财富 A股分红", trade_date, div5=divs, div_years=years)
+
+    payload = _load_aggregate_by_code(
+        f"stocktrend_ashare_dividends_{trade_date}.json",
+        [item["code"] for item in A_SHARE_STOCKS],
+        "A股分红",
+        loader,
+        "东方财富 A股分红",
+        trade_date,
+    )
+    return (payload.get("items") or {}).get(code) or _build_result_payload("东方财富 A股分红", trade_date, issue="聚合缓存缺失", div5=[], div_years=[])
 
 
 def _fetch_hk_financial_indicator(code: str, trade_date: str) -> Dict[str, Any]:
-    filename = f"stocktrend_hk_financial_{code}_{trade_date}.json"
-    cached = load_build_json(filename)
-    if cached is not None:
-        return cached
-    df = _safe_ak_call(f"{code} 港股核心指标", ak.stock_hk_financial_indicator_em, symbol=code)
-    payload: Dict[str, Any] = {}
-    if df is not None and not df.empty:
+    def loader(stock_code: str) -> Dict[str, Any]:
+        df = _safe_ak_call(f"{stock_code} 港股核心指标", ak.stock_hk_financial_indicator_em, symbol=stock_code)
+        if df is None or df.empty:
+            return _build_result_payload("东方财富 港股核心指标", trade_date, issue="公开接口返回空数据")
         row = df.iloc[0].to_dict()
-        payload = {
-            "pe": _to_float(row.get("市盈率")),
-            "pb": _to_float(row.get("市净率")),
-            "div": _to_float(row.get("股息率TTM(%)")),
-            "dividend_ttm": _to_float(row.get("每股股息TTM(港元)")),
-            "mkt_raw": _to_float(row.get("总市值(港元)")),
-            "roe": _to_float(row.get("股东权益回报率(%)")),
-        }
-    save_build_json(filename, payload)
-    return payload
+        return _build_result_payload(
+            "东方财富 港股核心指标",
+            trade_date,
+            pe=_to_float(row.get("市盈率")),
+            pb=_to_float(row.get("市净率")),
+            div=_to_float(row.get("股息率TTM(%)")),
+            dividend_ttm=_to_float(row.get("每股股息TTM(港元)")),
+            mkt_raw=_to_float(row.get("总市值(港元)")),
+            roe=_to_float(row.get("股东权益回报率(%)")),
+        )
+
+    payload = _load_aggregate_by_code(
+        f"stocktrend_hk_financials_{trade_date}.json",
+        [str(item["code"]).zfill(5) for item in _load_hk_base_data()["stocks"]],
+        "港股核心指标",
+        loader,
+        "东方财富 港股核心指标",
+        trade_date,
+    )
+    return (payload.get("items") or {}).get(code) or _build_result_payload("东方财富 港股核心指标", trade_date, issue="聚合缓存缺失")
 
 
 def _fetch_hk_financial_analysis(code: str, trade_date: str) -> Dict[str, Any]:
-    filename = f"stocktrend_hk_financial_analysis_{code}_{trade_date}.json"
-    cached = load_build_json(filename)
-    if cached is not None:
-        return cached
+    def loader(stock_code: str) -> Dict[str, Any]:
+        analysis_fn = getattr(ak, "stock_financial_hk_analysis_indicator_em", None)
+        if analysis_fn is None:
+            return _build_result_payload("东方财富 港股财务分析", trade_date, issue="AKShare 未提供港股财务分析接口")
+        df = _safe_ak_call(f"{stock_code} 港股财务分析", analysis_fn, symbol=stock_code)
+        if df is None or df.empty:
+            return _build_result_payload("东方财富 港股财务分析", trade_date, issue="公开接口返回空数据")
+        row = df.iloc[-1].to_dict()
+        report_year = _extract_year_from_row(row, ["REPORT_DATE", "REPORT_YEAR", "REPORT_DATE_NAME", "报告期"])
+        return _build_result_payload(
+            "东方财富 港股财务分析",
+            trade_date,
+            roe=_find_metric_by_any_keywords(row, [["净资产收益率"], ["股东权益回报率"]]),
+            margin=_find_metric_by_any_keywords(row, [["销售毛利率"], ["毛利率"]]),
+            liab=_find_metric_by_any_keywords(row, [["资产负债率"], ["负债率"]]),
+            report_year=report_year,
+        )
 
-    payload: Dict[str, Any] = {}
-    analysis_fn = getattr(ak, "stock_financial_hk_analysis_indicator_em", None)
-    if analysis_fn is not None:
-        df = _safe_ak_call(f"{code} 港股财务分析", analysis_fn, symbol=code)
-        if df is not None and not df.empty:
-            row = df.iloc[-1].to_dict()
-            payload = {
-                "roe": _find_metric_by_any_keywords(row, [["净资产收益率"], ["股东权益回报率"]]),
-                "margin": _find_metric_by_any_keywords(row, [["销售毛利率"], ["毛利率"]]),
-                "liab": _find_metric_by_any_keywords(row, [["资产负债率"], ["负债率"]]),
-            }
-
-    save_build_json(filename, payload)
-    return payload
+    payload = _load_aggregate_by_code(
+        f"stocktrend_hk_financial_analysis_{trade_date}.json",
+        [str(item["code"]).zfill(5) for item in _load_hk_base_data()["stocks"]],
+        "港股财务分析",
+        loader,
+        "东方财富 港股财务分析",
+        trade_date,
+    )
+    return (payload.get("items") or {}).get(code) or _build_result_payload("东方财富 港股财务分析", trade_date, issue="聚合缓存缺失")
 
 
 def _fetch_hk_dividends(code: str, trade_date: str) -> Dict[str, Any]:
-    filename = f"stocktrend_hk_dividend_{code}_{trade_date}.json"
+    def loader(stock_code: str) -> Dict[str, Any]:
+        dividend_fn = getattr(ak, "stock_hk_dividend_payout_em", None)
+        if dividend_fn is None:
+            return _build_result_payload("东方财富 港股分红派息", trade_date, issue="AKShare 未提供港股分红接口", div5=[], div_years=[])
+        df = _safe_ak_call(f"{stock_code} 港股分红派息", dividend_fn, symbol=stock_code)
+        if df is None or df.empty:
+            return _build_result_payload("东方财富 港股分红派息", trade_date, issue="公开接口返回空数据", div5=[], div_years=[])
+        latest_by_year: Dict[int, Dict[str, Any]] = {}
+        for row in df.to_dict("records"):
+            year = _extract_year_from_row(row, ["报告期", "派息年度", "年度", "财年", "财政年度"])
+            if year is None:
+                continue
+            latest_by_year[year] = row
+        years = sorted(latest_by_year.keys())[-5:]
+        divs: List[Optional[float]] = []
+        for year in years:
+            row = latest_by_year[year]
+            divs.append(_find_metric_by_any_keywords(row, [["每股股息"], ["每股派息"], ["派息", "每股"], ["股息"]]))
+        return _build_result_payload("东方财富 港股分红派息", trade_date, div5=divs, div_years=years)
+
+    payload = _load_aggregate_by_code(
+        f"stocktrend_hk_dividends_{trade_date}.json",
+        [str(item["code"]).zfill(5) for item in _load_hk_base_data()["stocks"]],
+        "港股分红派息",
+        loader,
+        "东方财富 港股分红派息",
+        trade_date,
+    )
+    return (payload.get("items") or {}).get(code) or _build_result_payload("东方财富 港股分红派息", trade_date, issue="聚合缓存缺失", div5=[], div_years=[])
+
+
+def _fetch_stock_connect_holdings(codes: List[str], trade_date: str, market_key: str, label: str) -> Dict[str, Any]:
+    filename = f"stocktrend_{market_key}_holdings_{trade_date}.json"
     cached = load_build_json(filename)
     if cached is not None:
         return cached
 
-    payload = {"div5": [], "div_years": []}
-    dividend_fn = getattr(ak, "stock_hk_dividend_payout_em", None)
-    if dividend_fn is not None:
-        df = _safe_ak_call(f"{code} 港股分红派息", dividend_fn, symbol=code)
-        if df is not None and not df.empty:
-            latest_by_year: Dict[int, Dict[str, Any]] = {}
-            for row in df.to_dict("records"):
-                year = _extract_year_from_row(row, ["报告期", "派息年度", "年度", "财年", "财政年度"])
-                if year is None:
-                    continue
-                latest_by_year[year] = row
+    payload: Dict[str, Any] = {
+        "items": {},
+        "summary": {"requested": len(codes), "success": 0, "failed": 0},
+        "error_reasons": [],
+    }
+    holding_fn = getattr(ak, "stock_hsgt_individual_em", None)
+    if holding_fn is None:
+        payload["summary"]["failed"] = len(codes)
+        payload["error_reasons"] = ["AKShare 未提供 stock_hsgt_individual_em 接口"]
+        save_build_json(filename, payload)
+        return payload
 
-            years = sorted(latest_by_year.keys())[-5:]
-            divs: List[Optional[float]] = []
-            for year in years:
-                row = latest_by_year[year]
-                divs.append(
-                    _find_metric_by_any_keywords(
-                        row,
-                        [["每股股息"], ["每股派息"], ["派息", "每股"], ["股息"]],
-                    )
-                )
-            payload = {"div5": divs, "div_years": years}
+    for code in codes:
+        try:
+            df = call_akshare_with_retry(f"{code} {label}", holding_fn, symbol=code)
+        except Exception as exc:
+            reason = str(exc)
+            payload["items"][code] = {"issue": reason}
+            payload["summary"]["failed"] += 1
+            payload["error_reasons"].append(reason)
+            print(f"[!] {code} {label} 失败：{exc}")
+            continue
 
-    save_build_json(filename, payload)
-    return payload
+        if df is None or df.empty:
+            reason = "公开接口返回空数据"
+            payload["items"][code] = {"issue": reason}
+            payload["summary"]["failed"] += 1
+            payload["error_reasons"].append(reason)
+            continue
 
+        row = df.iloc[-1].to_dict()
+        shares = _to_float(row.get("持股数量"))
+        pct = (
+            _to_float(row.get("持股数量占A股百分比"))
+            if row.get("持股数量占A股百分比") is not None
+            else _find_metric_by_any_keywords(
+                row,
+                [["持股数量占A股百分比"], ["占总股本", "比例"], ["占已发行股份", "比例"], ["占比"]],
+            )
+        )
+        issue = None
+        if shares is None and pct is None:
+            issue = "公开接口未返回持股字段"
+            payload["summary"]["failed"] += 1
+            payload["error_reasons"].append(issue)
+        else:
+            payload["summary"]["success"] += 1
+        payload["items"][code] = {
+            "shares": shares,
+            "pct": pct,
+            "holding_date": str(row.get("持股日期") or ""),
+            "issue": issue,
+        }
 
-def _fetch_hk_southbound(code: str, trade_date: str) -> Dict[str, Any]:
-    filename = f"stocktrend_hk_southbound_{code}_{trade_date}.json"
-    cached = load_build_json(filename)
-    if cached is not None:
-        return cached
-
-    payload: Dict[str, Any] = {}
-    south_fn = getattr(ak, "stock_hsgt_individual_em", None)
-    if south_fn is not None:
-        df = _safe_ak_call(f"{code} 港股通持股", south_fn, stock=code)
-        if df is not None and not df.empty:
-            row = df.iloc[-1].to_dict()
-            payload = {
-                "south_shares": _find_metric_by_any_keywords(
-                    row,
-                    [["持股数量"], ["持股数"], ["股数"]],
-                ),
-                "south_pct": _find_metric_by_any_keywords(
-                    row,
-                    [["占总股本", "比例"], ["占总股本"], ["占已发行股份", "比例"], ["占比"]],
-                ),
-            }
-
+    payload["error_reasons"] = _dedupe_texts(payload["error_reasons"])
     save_build_json(filename, payload)
     return payload
 
 
 def _fetch_ashare_financial_snapshot(code: str, trade_date: str) -> Dict[str, Any]:
-    filename = f"stocktrend_ashare_financial_{code}_{trade_date}.json"
-    cached = load_build_json(filename)
-    if cached is not None:
-        return cached
-    df = _safe_ak_call(f"{code} A股财务摘要", ak.stock_financial_abstract_ths, symbol=code, indicator="按年度")
-    payload: Dict[str, Any] = {}
-    if df is not None and not df.empty:
-        row = df.iloc[-1].to_dict()
-        payload = {
-            "roe": _find_metric(row, ["净资产收益率"]),
-            "margin": _find_metric(row, ["销售毛利率"]),
-            "liab": _find_metric(row, ["资产负债率"]),
-            "eps": _find_metric(row, ["基本每股收益"]),
-        }
-    save_build_json(filename, payload)
-    return payload
+    def loader(stock_code: str) -> Dict[str, Any]:
+        symbol = f"{stock_code}.SH" if stock_code.startswith("6") else f"{stock_code}.SZ"
+        analysis_fn = getattr(ak, "stock_financial_analysis_indicator_em", None)
+        if analysis_fn is None:
+            return _build_result_payload("东方财富 A股财务分析", trade_date, issue="AKShare 未提供 A股财务分析接口")
+        df = _safe_ak_call(f"{stock_code} A股财务分析", analysis_fn, symbol=symbol, indicator="按报告期")
+        if df is None or df.empty:
+            return _build_result_payload("东方财富 A股财务分析", trade_date, issue="公开接口返回空数据")
+        row = df.iloc[0].to_dict()
+        report_year = _extract_year_from_row(row, ["REPORT_DATE", "REPORT_YEAR", "REPORT_DATE_NAME"])
+        return _build_result_payload(
+            "东方财富 A股财务分析",
+            trade_date,
+            roe=_to_float(row.get("ROEJQ")),
+            margin=_to_float(row.get("XSMLL")),
+            liab=_to_float(row.get("ZCFZL")),
+            eps=_to_float(row.get("EPSJB")),
+            report_year=report_year,
+        )
+
+    payload = _load_aggregate_by_code(
+        f"stocktrend_ashare_financials_{trade_date}.json",
+        [item["code"] for item in A_SHARE_STOCKS],
+        "A股财务分析",
+        loader,
+        "东方财富 A股财务分析",
+        trade_date,
+    )
+    return (payload.get("items") or {}).get(code) or _build_result_payload("东方财富 A股财务分析", trade_date, issue="聚合缓存缺失")
 
 
 def _fetch_ashare_northbound(trade_date: str) -> Dict[str, Dict[str, Any]]:
-    filename = f"stocktrend_ashare_northbound_{trade_date}.json"
-    cached = load_build_json(filename)
-    if cached is not None:
-        return cached
-    df = _safe_ak_call("A股北向持股", ak.stock_hsgt_hold_stock_em, market="北向", indicator="今日排行")
-    payload: Dict[str, Dict[str, Any]] = {}
-    if df is not None and not df.empty:
-        for row in df.to_dict("records"):
-            code = str(row.get("代码") or "").zfill(6)
-            payload[code] = {
-                "north_shares": _to_float(row.get("今日持股-股数")),
-                "north_pct": _to_float(row.get("今日持股-占总股本比")),
-            }
-    save_build_json(filename, payload)
-    return payload
+    codes = [item["code"] for item in A_SHARE_STOCKS]
+    payload = _fetch_stock_connect_holdings(codes, trade_date, "ashare_northbound", "A股北向持股")
+    result: Dict[str, Dict[str, Any]] = {}
+    for code, row in (payload.get("items") or {}).items():
+        result[str(code).zfill(6)] = {
+            "north_shares": row.get("shares"),
+            "north_pct": row.get("pct"),
+            "north_date": row.get("holding_date"),
+            "issue": row.get("issue"),
+        }
+    return result
 
 
 def _fetch_ashare_main_flow(codes: List[str], trade_date: str) -> Dict[str, Dict[str, Any]]:
@@ -639,9 +809,22 @@ def _build_generic_hk_texts(name: str, sector_key: str, pe: Optional[float], pos
 
 
 def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
+    ashare_codes = [item["code"] for item in A_SHARE_STOCKS]
     spot_map = _load_ashare_spot(trade_date)
-    north_map = _fetch_ashare_northbound(trade_date)
-    flow_map = _fetch_ashare_main_flow([item["code"] for item in A_SHARE_STOCKS], trade_date)
+    hist_payload = _load_hist_cache("ashare", ashare_codes, trade_date)
+    hist_warning = _build_aggregate_warning(hist_payload, "A股历史行情")
+    north_payload = _fetch_stock_connect_holdings(ashare_codes, trade_date, "ashare_northbound", "A股北向持股")
+    north_warning = _build_holding_warning(north_payload, "A股北向持股")
+    north_map = {
+        str(code).zfill(6): {
+            "north_shares": row.get("shares"),
+            "north_pct": row.get("pct"),
+            "north_date": row.get("holding_date"),
+            "issue": row.get("issue"),
+        }
+        for code, row in (north_payload.get("items") or {}).items()
+    }
+    flow_map = _fetch_ashare_main_flow(ashare_codes, trade_date)
     stocks: List[Dict[str, Any]] = []
 
     for meta in A_SHARE_STOCKS:
@@ -667,6 +850,15 @@ def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
             div_yield = last_div / price * 100
 
         generated = _build_generic_texts(meta["zh"], meta["sector"], _to_float(spot.get("市盈率-动态")), hist_stats.get("pos"), flow.get("main_net_in"), north.get("north_pct"))
+        stock_issues = []
+        for issue_text in [
+            _build_issue_text("历史行情", None if hist_rows else "公开接口返回空数据"),
+            _build_issue_text("财务分析", financial.get("issue")),
+            _build_issue_text("分红", dividends.get("issue")),
+            _build_issue_text("北向持股", north.get("issue")),
+        ]:
+            if issue_text:
+                stock_issues.append(issue_text)
         stocks.append(
             {
                 **meta,
@@ -696,12 +888,20 @@ def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
                 "margin": financial.get("margin"),
                 "liab": financial.get("liab"),
                 "eps": financial.get("eps"),
+                "financial_report_year": financial.get("report_year"),
+                "financial_source": financial.get("source"),
+                "financial_as_of": financial.get("as_of"),
                 "div5": dividends.get("div5") or [],
                 "div_years": dividends.get("div_years") or [],
+                "dividend_source": dividends.get("source"),
+                "dividend_as_of": dividends.get("as_of"),
                 "main_inflow": flow.get("main_net_in"),
                 "north_pct": north.get("north_pct"),
                 "north_shares": north.get("north_shares"),
+                "north_date": north.get("north_date"),
                 "north_value": None,
+                "history_as_of": trade_date,
+                "data_issues": stock_issues,
                 **generated,
             }
         )
@@ -713,10 +913,10 @@ def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
             "tag": f"收盘快照 · {trade_date}",
             "subtitle": "依据《个股走势分析》需求文档的 32 只核心 A 股清单生成；使用统一静态模板渲染，可直接部署或归档。",
             "date": f"行情：{trade_date} 收盘快照（AKShare / 东方财富）｜ A股惯例：涨红跌绿",
-            "databadge": "⚠️ 数据口径：行情为当日收盘快照；主力净流入优先复用 build/ 中的共享资金流产物；北向持股为东方财富公开披露；分红与财务摘要来自公开接口。",
+            "databadge": "⚠️ 数据口径：行情为当日收盘快照；主力净流入优先复用 build/cache 中的共享资金流产物；北向持股、财务分析、分红均来自公开接口。",
             "modal_databadge": "⚠️ 本页为静态收盘快照：价格、涨跌、成交额、市值、估值均对应收盘口径；主力净流入为当日口径；分红 / 财务指标取公开披露值，若缺失则显示“—”。",
             "disclaimer": "⚠️ 免责声明：页面仅做公开数据整理与展示，不构成投资建议。",
-            "footer": f"A股核心个股走势分析 · {trade_date} · 数据源：AKShare / 东方财富 / 同花顺",
+            "footer": f"A股核心个股走势分析 · {trade_date} · 数据源：AKShare / 东方财富",
             "snap_iso": trade_date,
             "currency_unit": "元",
             "money_unit": "亿元",
@@ -728,6 +928,7 @@ def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
             "roster_note": "若公开财务摘要可得，则按最近年度 ROE 分层展示；缺失则不强行补值。",
             "combo_section_title": "三种观察组合",
             "combo_note": "组合仅用于页面浏览时的快速分组，不代表实际持仓建议。",
+            "fetch_warnings": [item for item in [hist_warning, north_warning, _build_aggregate_warning(load_build_json(f"stocktrend_ashare_financials_{trade_date}.json") or {}, "A股财务分析"), _build_aggregate_warning(load_build_json(f"stocktrend_ashare_dividends_{trade_date}.json") or {}, "A股分红")] if item],
         },
         "sectors": A_SHARE_SECTORS,
         "combos": A_SHARE_COMBOS,
@@ -739,6 +940,20 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
     base_data = _load_hk_base_data()
     base_stocks = {str(item["code"]).zfill(5): item for item in base_data["stocks"]}
     spot_map = _load_hk_spot(trade_date)
+    hk_codes = sorted(base_stocks.keys())
+    hist_payload = _load_hist_cache("hk", hk_codes, trade_date)
+    hist_warning = _build_aggregate_warning(hist_payload, "港股历史行情")
+    south_payload = _fetch_stock_connect_holdings(hk_codes, trade_date, "hk_southbound", "港股通持股")
+    south_warning = _build_holding_warning(south_payload, "港股通持股")
+    south_map = {
+        str(code).zfill(5): {
+            "south_shares": row.get("shares"),
+            "south_pct": row.get("pct"),
+            "south_date": row.get("holding_date"),
+            "issue": row.get("issue"),
+        }
+        for code, row in (south_payload.get("items") or {}).items()
+    }
     stocks: List[Dict[str, Any]] = []
 
     for code, base in base_stocks.items():
@@ -750,7 +965,7 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
         fin = _fetch_hk_financial_indicator(code, trade_date)
         fin_analysis = _fetch_hk_financial_analysis(code, trade_date)
         dividends = _fetch_hk_dividends(code, trade_date)
-        southbound = _fetch_hk_southbound(code, trade_date)
+        southbound = south_map.get(code, {})
         generated = _build_generic_hk_texts(
             base["zh"],
             base["sector"],
@@ -759,6 +974,16 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
             fin.get("div"),
             southbound.get("south_pct"),
         )
+        stock_issues = []
+        for issue_text in [
+            _build_issue_text("历史行情", None if hist_rows else "公开接口返回空数据"),
+            _build_issue_text("港股核心指标", fin.get("issue")),
+            _build_issue_text("财务分析", fin_analysis.get("issue")),
+            _build_issue_text("分红", dividends.get("issue")),
+            _build_issue_text("南向持股", southbound.get("issue")),
+        ]:
+            if issue_text:
+                stock_issues.append(issue_text)
 
         stocks.append(
             {
@@ -788,17 +1013,25 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
                 "roe": fin_analysis.get("roe") if fin_analysis.get("roe") is not None else fin.get("roe"),
                 "margin": fin_analysis.get("margin"),
                 "liab": fin_analysis.get("liab"),
+                "financial_report_year": fin_analysis.get("report_year"),
+                "financial_source": fin_analysis.get("source") or fin.get("source"),
+                "financial_as_of": fin_analysis.get("as_of") or fin.get("as_of"),
                 "div5": dividends.get("div5") or [],
                 "div_years": dividends.get("div_years") or [],
+                "dividend_source": dividends.get("source"),
+                "dividend_as_of": dividends.get("as_of"),
                 "south": southbound.get("south_pct"),
                 "south_pct": southbound.get("south_pct"),
                 "south_shares": southbound.get("south_shares"),
+                "south_date": southbound.get("south_date"),
+                "history_as_of": trade_date,
                 "signal": generated["signal"],
                 "capital": generated["capital"],
                 "trend": generated["trend"],
                 "suggest": generated["suggest"],
                 "summary": generated["summary"],
                 "risks": base.get("risks") or generated["risks"],
+                "data_issues": stock_issues,
             }
         )
 
@@ -821,6 +1054,7 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
             "show_roster": True,
             "roster_title": "ROE 分层观察名单（港股）",
             "roster_note": "若公开财务分析可得，则按最近可取 ROE 分层展示；缺失则不强行补值。",
+            "fetch_warnings": [item for item in [hist_warning, south_warning, _build_aggregate_warning(load_build_json(f"stocktrend_hk_financials_{trade_date}.json") or {}, "港股核心指标"), _build_aggregate_warning(load_build_json(f"stocktrend_hk_financial_analysis_{trade_date}.json") or {}, "港股财务分析"), _build_aggregate_warning(load_build_json(f"stocktrend_hk_dividends_{trade_date}.json") or {}, "港股分红派息")] if item],
         }
     )
     return {"meta": meta, "sectors": base_data["sectors"], "combos": base_data["combos"], "stocks": stocks}
@@ -837,16 +1071,18 @@ def collect_pages(data_date: Optional[str] = None, market: str = "all") -> Dict[
 
 
 def write_page_jsons(pages: Dict[str, Dict[str, Any]], out_dir: Optional[str] = None) -> List[str]:
-    target_dir = out_dir or default_build_dir()
-    os.makedirs(target_dir, exist_ok=True)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     written = []
     if "ashare" in pages:
-        path = os.path.join(target_dir, "stocktrend_ashare.json")
-        write_json(path, pages["ashare"])
+        path = os.path.join(out_dir, "stocktrend_ashare.json") if out_dir else save_data_json("stocktrend_ashare.json", pages["ashare"], source=pages["ashare"]["meta"].get("footer"), tags={"market": "ashare", "data_date": pages["ashare"]["meta"].get("snap_iso")})
+        if out_dir:
+            write_json(path, {"_meta": {"cache_scope": "page_data", "market": "ashare", "data_date": pages["ashare"]["meta"].get("snap_iso")}, "data": pages["ashare"]})
         written.append(path)
     if "hk" in pages:
-        path = os.path.join(target_dir, "stocktrend_hk.json")
-        write_json(path, pages["hk"])
+        path = os.path.join(out_dir, "stocktrend_hk.json") if out_dir else save_data_json("stocktrend_hk.json", pages["hk"], source=pages["hk"]["meta"].get("footer"), tags={"market": "hk", "data_date": pages["hk"]["meta"].get("snap_iso")})
+        if out_dir:
+            write_json(path, {"_meta": {"cache_scope": "page_data", "market": "hk", "data_date": pages["hk"]["meta"].get("snap_iso")}, "data": pages["hk"]})
         written.append(path)
     return written
 
@@ -855,7 +1091,7 @@ def main() -> Dict[str, Dict[str, Any]]:
     parser = argparse.ArgumentParser(description="stocktrend 数据收集脚本：按请求拆分 JSON 产物，并汇总生成 stocktrend 页面 JSON")
     parser.add_argument("--date", help="交易日 YYYY-MM-DD，默认使用共享交易日判断逻辑")
     parser.add_argument("--market", choices=["all", "ashare", "hk"], default="all", help="输出市场，默认 all")
-    parser.add_argument("--out", help="输出目录，默认 <项目根>/build")
+    parser.add_argument("--out", help="输出目录，默认 <项目根>/build/data")
     args = parser.parse_args()
 
     pages = collect_pages(data_date=args.date, market=args.market)

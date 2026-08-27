@@ -2,10 +2,10 @@
 
 静态股票分析页面生成项目。当前主流程会统一生成 4 个页面：
 
-- `build/index.html`：站点导航首页
-- `build/fundflow.html`：A 股资金流日报
-- `build/stocktrend_ashare.html`：A 股个股走势
-- `build/stocktrend_hk.html`：港股个股走势
+- `build/site/index.html`：站点导航首页
+- `build/site/fundflow.html`：A 股资金流日报
+- `build/site/stocktrend_ashare.html`：A 股个股走势
+- `build/site/stocktrend_hk.html`：港股个股走势
 
 > 全部为零 JS 静态 HTML，适合 GitHub Pages 等静态部署。
 
@@ -17,14 +17,16 @@
 | `common/` | 公共模块。包括请求逻辑、JSON 读写、站点导航、缓存目录等。 |
 | `fundflow/` | A 股资金流页面模块。 |
 | `stocktrend/` | A 股 / 港股个股走势页面模块。 |
-| `build/` | 运行后生成的 JSON / HTML 产物目录。 |
-| `common/cache/` | 长期稳定缓存目录。 |
+| `build/site/` | 最终静态站点 HTML。 |
+| `build/data/` | 页面级 JSON 中间产物。 |
+| `build/cache/` | 按天缓存的请求级数据。 |
+| `common/cache/` | 长期稳定缓存目录。默认不按时间过期，按业务规则决定是否刷新。 |
 
 ## 页面组织方式
 
 当前站点不是把 3 张内容页硬塞到单个 HTML 里，而是采用：
 
-1. 一个导航首页 `build/index.html`
+1. 一个导航首页 `build/site/index.html`
 2. 三个独立内容页
 3. 每个内容页底部带静态 tab 导航
 
@@ -73,22 +75,23 @@
 | `main.py` | **仓库主入口**。统一生成 `fundflow` 与 `stocktrend` 的 JSON / HTML 页面。 |
 | `common/` | **共享模块**。统一放置请求逻辑、JSON 读写、`common/cache/` 等公共能力。 |
 | `fundflow_main.py` | `fundflow` 页面总控。先生成 JSON，再渲染 HTML。 |
-| `fundflow_data_fetcher.py` | `fundflow` 数据抓取层。每个请求模块单独产出到 `build/`，再汇总成 `build/fundflow.json`。 |
+| `fundflow_data_fetcher.py` | `fundflow` 数据抓取层。请求级缓存写到 `build/cache/`，页面 JSON 写到 `build/data/fundflow.json`。 |
 | `fundflow_ui_renderer.py` | **UI 渲染层**。读取 JSON 中间产物并生成纯静态 HTML。 |
 | `report.css` | 网页报告样式源（深色金融终端风、涨红跌绿），生成 HTML 时**内联**进产物，保证 HTML 单文件自包含。 |
 
-**输出**（默认写入项目根 `build/`，已 gitignore；文件名固定无日期，每天运行覆盖前一天）：
+**输出**（默认写入项目根 `build/`，已 gitignore）：
 
 | 产物 | 说明 |
 |------|------|
-| `build/index.html` | 站点导航首页，统一链接到三张业务页面。 |
-| `build/fundflow.html` | **默认输出**。纯静态网页报告（数据内联、零 JS），移动端 Safari 可直接打开；打开/刷新即见最新。 |
-| `build/stocktrend_ashare.html` | A 股个股走势页。 |
-| `build/stocktrend_hk.html` | 港股个股走势页。 |
-| `build/fundflow.json` | `fundflow` 汇总 JSON。 |
-| `build/fundflow_*.json` / `build/stocktrend_*.json` | 各请求模块拆分后的 JSON 产物，供跨页面复用。 |
+| `build/site/index.html` | 站点导航首页，统一链接到三张业务页面。 |
+| `build/site/fundflow.html` | **默认输出**。纯静态网页报告（数据内联、零 JS），移动端 Safari 可直接打开。 |
+| `build/site/stocktrend_ashare.html` | A 股个股走势页。 |
+| `build/site/stocktrend_hk.html` | 港股个股走势页。 |
+| `build/data/fundflow.json` | `fundflow` 汇总 JSON。 |
+| `build/data/stocktrend_ashare.json` / `build/data/stocktrend_hk.json` | `stocktrend` 页面 JSON。 |
+| `build/cache/*.json` | 每日请求级缓存，供跨页面复用。 |
 
-**日常用法**：每天跑一次主脚本，打开 `build/index.html` 进入站点首页。
+**日常用法**：每天跑一次主脚本，打开 `build/site/index.html` 进入站点首页。
 
 ```bash
 ./.venv/bin/python main.py
@@ -98,16 +101,18 @@
 ```
 
 > 注：
-> 1. 长期稳定数据统一放在 `common/cache/`；每天变化的数据统一放在项目根 `build/`。
-> 2. `fundflow` 与 `stocktrend` 共用 `common/market_data.py` 中的请求逻辑。
-> 3. `stocktrend` 会优先读取 `build/stock_fundflow_today_full_<date>.json`，直接复用 `fundflow` 已请求过的资金流结果。
+> 1. 长期稳定数据统一放在 `common/cache/`；每天变化的数据拆分到 `build/cache/`，页面 JSON 进入 `build/data/`，最终 HTML 进入 `build/site/`。
+> 2. `common/cache/` 默认不靠 TTL 驱动失效；像申万行业常量这类参考数据会长期保留。
+> 3. 对“长期稳定但可能增量变化”的缓存，采用“命中即复用，发现缺失再刷新”的策略。例如 `sw_stock_map.json` 会在发现当日资金流股票里有未映射代码时自动重拉申万成分股并补齐新股。
+> 4. `fundflow` 与 `stocktrend` 共用 `common/market_data.py` 中的请求逻辑。
+> 5. `stocktrend` 会优先读取 `build/cache/stock_fundflow_today_full_<date>.json`，直接复用 `fundflow` 已请求过的资金流结果。
 
 ## 自动部署（GitHub Actions + Pages）
 
 `.github/workflows/ashare-report.yml` 会在**每个交易日 15:45（北京时间）收盘后**自动运行脚本并把 HTML 部署到 GitHub Pages：
 
 - 触发：`push`（推 main 即跑）+ `schedule`（周一至五 07:45 UTC）+ `workflow_dispatch`（可手动触发）
-- 流程：`python3 main.py`（统一产出首页 + `fundflow` + `stocktrend` JSON / HTML）→ 把 `build/index.html` 作为站点根首页上传，并附带三个业务页面 → `deploy-pages`
+- 流程：`python3 main.py`（统一产出首页 + `fundflow` + `stocktrend` JSON / HTML）→ 直接上传 `build/site/` → `deploy-pages`
 - 一次性配置：仓库 **Settings → Pages → Source 选「GitHub Actions」**，之后每次运行自动更新站点
 - 手动触发：仓库 **Actions → 选中该工作流 → Run workflow**
 - 站点地址：`https://<owner>.github.io/<repo>/`（根路径即导航首页）

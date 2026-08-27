@@ -20,6 +20,8 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+from common.storage import default_data_dir
+from common.storage import default_site_dir
 from common.site_navigation import render_site_nav
 from common.site_navigation import site_nav_css
 
@@ -27,10 +29,12 @@ from common.site_navigation import site_nav_css
 _WEEK = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 
-def default_build_dir():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    root_dir = os.path.dirname(script_dir)
-    return os.path.join(root_dir, "build")
+def default_input_dir():
+    return default_data_dir()
+
+
+def default_output_dir():
+    return default_site_dir()
 
 
 def _weekday_cn(date_str):
@@ -213,7 +217,8 @@ def build_market_views(result):
 
 def load_result(path):
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        payload = json.load(f)
+    return payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
 
 
 def write_html(path, result):
@@ -244,10 +249,13 @@ def write_html(path, result):
     <div class="hdr-r">
       <span class="live-badge"><span class="dot"></span>数据日期 {d}（{wd}）· 收盘</span>
       <div class="src-line">更新于 <b>{result["generated_at"]}</b> ｜ 数据源：{product_source_text(result["source"])}</div>
+      <div class="src-line">北向成交日 <b>{nb.get("trade_date") or "—"}</b> ｜ 行业数据 {len(sw)} / 31</div>
     </div>
   </div>
 '''
     )
+    for warning in result.get("fetch_warnings") or []:
+        S.append(f'  <div class="style-note"><b style="color:var(--amber)">⚠ 数据抓取提示</b> ｜ {warning}</div>\n')
 
     S.append(_panel("今日解读", "盘后速览", build_market_views(result)))
 
@@ -497,10 +505,11 @@ def write_html(path, result):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="A股收盘 HTML 渲染脚本（读取 JSON 中间产物，输出 build/fundflow.html）")
-    build_dir = default_build_dir()
-    ap.add_argument("--input", default=os.path.join(build_dir, "fundflow.json"), help="输入 JSON 路径")
-    ap.add_argument("--output", default=os.path.join(build_dir, "fundflow.html"), help="输出 HTML 路径")
+    ap = argparse.ArgumentParser(description="A股收盘 HTML 渲染脚本（读取 build/data/fundflow.json，输出 build/site/fundflow.html）")
+    input_dir = default_input_dir()
+    output_dir = default_output_dir()
+    ap.add_argument("--input", default=os.path.join(input_dir, "fundflow.json"), help="输入 JSON 路径")
+    ap.add_argument("--output", default=os.path.join(output_dir, "fundflow.html"), help="输出 HTML 路径")
     args = ap.parse_args()
 
     if not os.path.exists(args.input):

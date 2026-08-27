@@ -12,8 +12,8 @@
   - `fundflow`
   - `stocktrend`
 - `stocktrend` 目前支持两套页面：
-  - `build/stocktrend_ashare.json` + `build/stocktrend_ashare.html`
-  - `build/stocktrend_hk.json` + `build/stocktrend_hk.html`
+  - `build/data/stocktrend_ashare.json` + `build/site/stocktrend_ashare.html`
+  - `build/data/stocktrend_hk.json` + `build/site/stocktrend_hk.html`
 
 ## 二、原需求里的关键业务信息
 
@@ -68,29 +68,28 @@
 
 ## 三、当前代码结构
 
-```
+```text
 stocktrend/
 ├── stocktrend_data_fetcher.py   # 拉取数据并产出 JSON 中间结果
 ├── stocktrend_ui_renderer.py    # 基于 JSON 渲染静态 HTML
 ├── stocktrend_static_data.py    # 港股基础静态数据
 ├── stocktrend_style.css         # 独立 CSS 模板
-├── index.html                   # 旧模板参考文件（未接入当前主流程）
 └── Agent.md
 ```
 
 ## 四、当前重构约束
 
-- 每日变化的数据统一写到项目根 `build/`。
-- 长期稳定缓存统一放到 `common/cache/`。
-- `stocktrend` 会优先复用 `build/` 中已有请求产物，避免和 `fundflow` 重复拉取。
+- 每日变化的数据统一拆到 `build/cache/`，页面 JSON 输出到 `build/data/`，HTML 输出到 `build/site/`。
+- 长期稳定缓存统一放到 `common/cache/`，默认不按时间过期，而是按业务规则刷新。
+- `stocktrend` 会优先复用 `build/cache/` 中已有请求产物，避免和 `fundflow` 重复拉取。
 - 请求脚本只产出 JSON，不再输出 CSV。
 
 典型共享产物包括：
 
-- `build/stock_fundflow_today_full_<date>.json`
-- `build/stocktrend_ashare_spot_<date>.json`
-- `build/stocktrend_hk_spot_<date>.json`
-- `build/stocktrend_hist_<market>_<code>_<date>.json`
+- `build/cache/stock_fundflow_today_full_<date>.json`
+- `build/cache/stocktrend_ashare_spot_<date>.json`
+- `build/cache/stocktrend_hk_spot_<date>.json`
+- `build/cache/stocktrend_hist_<market>_<date>.json`
 
 ## 五、当前代码现状说明
 
@@ -99,7 +98,7 @@ stocktrend/
 1. 港股基础静态数据已从旧 `data.json` 切到 `stocktrend_static_data.py`。
 2. 页面样式已从旧 `build.py` 内嵌 CSS 切到 `stocktrend_style.css`。
 
-因此 `data.json` 与 `build.py` 已不再是运行依赖，可以删除；`index.html` 仍属于历史模板参考文件，但不参与当前主流程。
+因此 `data.json` 与 `build.py` 已不再是运行依赖，可以删除。
 
 ## 六、运行方式
 
@@ -121,5 +120,5 @@ python3 main.py --stocktrend-market hk
 
 - 不要把盘中实时值当成收盘值写入页面。
 - 不要对缺失字段做 alias、猜测或补造。
-- 需要复用的数据优先读 `build/`，长期稳定映射才进 `common/cache/`。
+- 需要复用的数据优先读 `build/cache/`，长期稳定映射才进 `common/cache/`。
 - 后续继续清理 `stocktrend` 遗留文件时，优先保留当前主流程依赖的 `stocktrend_static_data.py` 与 `stocktrend_style.css`。

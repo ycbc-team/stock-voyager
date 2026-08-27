@@ -6,7 +6,7 @@
 #   - workflow_dispatch : 支持手动触发（Actions 页 → Run workflow）
 #
 # 流程：checkout → 运行 main.py（统一生成首页 + fundflow + stocktrend 页面）
-#       → 把 build/index.html 作为站点根首页上传，并附带三个业务页面 → deploy-pages
+#       → 直接上传 build/site/ 作为 Pages 站点目录 → deploy-pages
 #
 # 前置要求（一次性）：
 #   仓库 Settings → Pages → Source 选「GitHub Actions」，之后每次运行自动更新站点。
@@ -50,7 +50,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 运行主脚本（统一生成 JSON 中间产物 + HTML 到 build/）
+      - name: 运行主脚本（统一生成 JSON 中间产物到 build/data，HTML 到 build/site）
         env:
           TZ: Asia/Shanghai
           REQ_DELAY: '0.4'   # 请求间隔，避免触发数据源限流
@@ -59,24 +59,22 @@ jobs:
           python main.py
           echo "--- build/ 内容 ---"
           ls -la build/
+          echo "--- build/site 内容 ---"
+          ls -la build/site/
+          echo "--- build/data 内容 ---"
+          ls -la build/data/
 
       - name: 检查报告生成
         run: |
-          test -f build/index.html && echo "✓ 导航首页已生成"
-          test -f build/fundflow.html && echo "✓ 报告已生成"
-          test -f build/stocktrend_ashare.html && echo "✓ A股 stocktrend 已生成"
-          test -f build/stocktrend_hk.html && echo "✓ 港股 stocktrend 已生成"
-          echo "「数据暂缺」占位数: $(grep -c '数据暂缺' build/fundflow.html || true)"
-          echo "「<script>」数: $(grep -c '<script' build/fundflow.html || true)"
+          test -f build/site/index.html && echo "✓ 导航首页已生成"
+          test -f build/site/fundflow.html && echo "✓ 报告已生成"
+          test -f build/site/stocktrend_ashare.html && echo "✓ A股 stocktrend 已生成"
+          test -f build/site/stocktrend_hk.html && echo "✓ 港股 stocktrend 已生成"
+          echo "「数据暂缺」占位数: $(grep -c '数据暂缺' build/site/fundflow.html || true)"
+          echo "「<script>」数: $(grep -c '<script' build/site/fundflow.html || true)"
 
-      - name: 组装 Pages 站点（根路径展示导航首页）
-        run: |
-          mkdir -p site
-          cp build/index.html site/index.html
-          cp build/fundflow.html site/fundflow.html
-          cp build/stocktrend_ashare.html site/stocktrend_ashare.html
-          cp build/stocktrend_hk.html site/stocktrend_hk.html
-          ls -la site/
+      - name: 检查 Pages 目录
+        run: ls -la build/site/
 
       - name: 配置 Pages
         uses: actions/configure-pages@v5
@@ -84,7 +82,7 @@ jobs:
       - name: 上传站点产物
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: build/site
 
       - name: 部署到 GitHub Pages
         id: deployment
