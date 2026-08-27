@@ -1075,7 +1075,7 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
 
 
 def collect_pages(data_date: Optional[str] = None, market: str = "all") -> Dict[str, Dict[str, Any]]:
-    trade_date = data_date or detect_trade_date()
+    trade_date = data_date or detect_trade_date(market)
     pages: Dict[str, Dict[str, Any]] = {}
     if market in {"all", "ashare"}:
         pages["ashare"] = _build_ashare_page(trade_date)

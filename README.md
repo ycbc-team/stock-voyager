@@ -109,9 +109,9 @@
 
 ## 自动部署（GitHub Actions + Pages）
 
-`.github/workflows/ashare-report.yml` 会在**每个交易日 15:45（北京时间）收盘后**自动运行脚本并把 HTML 部署到 GitHub Pages：
+`.github/workflows/ashare-report.yml` 会在**每个交易日 16:01（北京时间）收盘后**自动运行脚本并把 HTML 部署到 GitHub Pages：
 
-- 触发：`push`（推 main 即跑）+ `schedule`（周一至五 07:45 UTC）+ `workflow_dispatch`（可手动触发）
+- 触发：`push`（推 main 即跑）+ `schedule`（周一至五 08:01 UTC）+ `workflow_dispatch`（可手动触发）
 - 流程：`python3 main.py`（统一产出首页 + `fundflow` + `stocktrend` JSON / HTML）→ 直接上传 `build/site/` → `deploy-pages`
 - 一次性配置：仓库 **Settings → Pages → Source 选「GitHub Actions」**，之后每次运行自动更新站点
 - 手动触发：仓库 **Actions → 选中该工作流 → Run workflow**

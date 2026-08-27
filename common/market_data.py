@@ -220,23 +220,59 @@ def secid_from_code(code: str) -> Optional[str]:
     return None
 
 
-def detect_trade_date() -> str:
-    text = http_get("https://qt.gtimg.cn/q=sh000001", GTIMG_HEADERS, timeout=12, retries=3)
-    if text:
-        import re
-        match = re.search(r"~(\d{14})~", text)
-        if match:
-            raw_date = match.group(1)[:8]
-            return f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
-    now = datetime.datetime.now()
+def _previous_weekday(day: datetime.datetime) -> datetime.datetime:
+    current = day - datetime.timedelta(days=1)
+    while current.weekday() >= 5:
+        current -= datetime.timedelta(days=1)
+    return current
+
+
+def _quote_now(symbol: str) -> Optional[datetime.datetime]:
+    text = http_get(f"https://qt.gtimg.cn/q={symbol}", GTIMG_HEADERS, timeout=12, retries=3)
+    if not text:
+        return None
+    import re
+    match = re.search(r"~(\d{14})~", text)
+    if not match:
+        return None
+    try:
+        return datetime.datetime.strptime(match.group(1), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
+
+def detect_trade_date(market: str = "ashare") -> str:
+    """
+    Detect the default trade date for the requested market.
+
+    - `ashare`: use A-share close time (15:00, Beijing time)
+    - `hk`: use Hong Kong close time (16:00, Beijing time)
+    - `all`: use the stricter close time across both markets (16:00)
+    """
+    normalized_market = str(market or "ashare").lower()
+    if normalized_market not in {"ashare", "hk", "all"}:
+        normalized_market = "ashare"
+
+    symbol = "sh000001"
+    close_hour = 15
+    close_minute = 0
+    if normalized_market in {"hk", "all"}:
+        symbol = "hkHSI"
+        close_hour = 16
+        close_minute = 0
+
+    now = _quote_now(symbol)
+    if now is None:
+        sh_tz = datetime.timezone(datetime.timedelta(hours=8))
+        now = datetime.datetime.now(sh_tz).replace(tzinfo=None)
+
     if now.weekday() >= 5:
         day = now - datetime.timedelta(days=(now.weekday() - 4))
         return day.strftime("%Y-%m-%d")
-    if now.hour < 15 or (now.hour == 15 and now.minute < 30):
-        day = now - datetime.timedelta(days=1)
-        while day.weekday() >= 5:
-            day -= datetime.timedelta(days=1)
-        return day.strftime("%Y-%m-%d")
+
+    before_close = (now.hour, now.minute, now.second) < (close_hour, close_minute, 0)
+    if before_close:
+        return _previous_weekday(now).strftime("%Y-%m-%d")
     return now.strftime("%Y-%m-%d")
 
 

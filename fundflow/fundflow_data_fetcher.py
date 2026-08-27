@@ -546,7 +546,7 @@ def _dedupe_texts(items: List[str]) -> List[str]:
 
 def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose: bool = True) -> Dict[str, Any]:
     reset_request_count()
-    resolved_date = data_date or detect_trade_date()
+    resolved_date = data_date or detect_trade_date("ashare")
     fetch_warnings: List[str] = []
     if verbose:
         print(f"[*] 数据日期: {resolved_date}")
