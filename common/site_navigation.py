@@ -17,6 +17,11 @@ SITE_TABS = [
 
 def site_nav_css() -> str:
     return """
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #090c10;
+}
 .site-shell-body { padding-bottom: 92px; }
 .site-nav {
   position: fixed;
