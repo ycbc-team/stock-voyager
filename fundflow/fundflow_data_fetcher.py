@@ -687,6 +687,29 @@ def generate_market_verdict(report_data: Dict[str, Any]) -> Dict[str, Any]:
     return {"headline": headline, "tone": tone, "tone_word": tone_word, "avg_pct": avg_pct}
 
 
+def _pool_to_list(df) -> List[Dict[str, Any]]:
+    """将涨停/跌停池 DataFrame 转换为 [{code, name, pct}] 列表（列名兼容中/英写法）。"""
+    if df is None or len(df) == 0:
+        return []
+    cols = list(df.columns)
+    out: List[Dict[str, Any]] = []
+
+    def pick(row, *names):
+        for n in names:
+            if n in cols:
+                return row.get(n)
+        return None
+
+    for _, row in df.iterrows():
+        code = pick(row, "代码", "code")
+        name = pick(row, "名称", "name")
+        pct = to_float(pick(row, "涨跌幅", "pct"))
+        if code is None:
+            continue
+        out.append({"code": str(code), "name": str(name) if name is not None else "", "pct": pct})
+    return out
+
+
 def fetch_market_breadth(data_date: str) -> Dict[str, Any]:
     """抓取全市场个股涨跌家数 + 涨停/跌停数量（AKShare 东方财富源）。
 
@@ -702,6 +725,8 @@ def fetch_market_breadth(data_date: str) -> Dict[str, Any]:
         "flat": None,
         "limit_up": None,
         "limit_down": None,
+        "zt_list": [],
+        "dt_list": [],
         "source": "",
         "warnings": warnings,
     }
@@ -713,6 +738,8 @@ def fetch_market_breadth(data_date: str) -> Dict[str, Any]:
         dt = call_akshare_with_retry("跌停池", ak.stock_zt_pool_dtgc_em, date=yyyymmdd)
         out["limit_up"] = int(len(zt)) if zt is not None else None
         out["limit_down"] = int(len(dt)) if dt is not None else None
+        out["zt_list"] = _pool_to_list(zt)
+        out["dt_list"] = _pool_to_list(dt)
     except Exception as e:  # noqa: BLE001
         warnings.append(f"涨停/跌停池获取失败: {e}")
 
@@ -794,6 +821,21 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
         print(f"[+] 个股涨跌家数: {'可用' if breadth['available'] else '暂不可用'}（{breadth['source'] or '—'}）")
     for w in breadth.get("warnings", []):
         fetch_warnings.append(w)
+
+    # 涨停/跌停股 → 申万一级行业 领涨/领跌映射（数据驱动，零编造）
+    zt_by_ind: Dict[str, List[Dict[str, Any]]] = {}
+    dt_by_ind: Dict[str, List[Dict[str, Any]]] = {}
+    for pool_key, target in (("zt_list", zt_by_ind), ("dt_list", dt_by_ind)):
+        for s in (breadth.get(pool_key) or []):
+            ind_code = stock_to_industry.get(str(s.get("code", "")))
+            if not ind_code:
+                continue
+            target.setdefault(ind_code, []).append({"name": s.get("name", ""), "pct": s.get("pct")})
+    for it in sw_list:
+        zt = sorted(zt_by_ind.get(it["code"], []), key=lambda z: (z.get("pct") or 0), reverse=True)[:3]
+        dt = sorted(dt_by_ind.get(it["code"], []), key=lambda z: (z.get("pct") or 0))[:3]
+        it["zt"] = zt
+        it["dt"] = dt
 
     style_proxy = compute_style_proxy(sw_list)
     if verbose:

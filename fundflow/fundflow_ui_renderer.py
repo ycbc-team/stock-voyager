@@ -389,14 +389,27 @@ def write_html(path, result):
     hot = hs.get("hot", [])
     weak = hs.get("weak", [])
     if hot or weak:
-        def hcol(title, items, color):
+        def hcol(title, items, color, kind):
             cards = []
             for x in items:
-                pct_s, _ = h_pct(x["pct"])
-                cards.append(f'      <div class="hot-card"><div class="ic" style="background:rgba(255,255,255,.05);color:var(--{color})">{x["name"][:2]}</div><div><div class="ht">{x["name"]}</div><div class="hd">涨跌幅 {pct_s}</div></div></div>')
+                pct_s, pct_cls = h_pct(x["pct"])
+                net = x.get("main_net_in")
+                net_s = (h_yi_signed(net) + "亿") if net is not None else "—"
+                pool = x.get(kind) or []
+                if pool:
+                    lead_s = "、".join(f'{l["name"]}({(l["pct"] or 0):+.2f}%)' for l in pool)
+                else:
+                    lead_s = "—"
+                lead_label = "领涨" if kind == "zt" else "领跌"
+                cards.append(
+                    f'      <div class="hot-card"><div class="ic" style="background:rgba(255,255,255,.05);color:var(--{color})">{x["name"][:2]}</div>'
+                    f'<div><div class="ht">{x["name"]}</div>'
+                    f'<div class="hd">涨跌幅 <b class="{pct_cls}">{pct_s}</b> · 主力 {net_s}</div>'
+                    f'<div class="hl">{lead_label} {lead_s}</div></div></div>'
+                )
             return f'    <div class="hot-col"><h4>{title} <span class="pill" style="background:rgba(246,70,93,.12);color:var(--up-b)">TOP {len(items)}</span></h4>\n' + "\n".join(cards) + "\n    </div>"
 
-        body = '    <div class="hot">\n' + hcol("今日热点（涨幅前）", hot, "up-b") + hcol("今日异动（跌幅前）", weak, "down-b") + "    </div>\n"
+        body = '    <div class="hot">\n' + hcol("今日热点（涨幅前）", hot, "up-b", "zt") + hcol("今日异动（跌幅前）", weak, "down-b", "dt") + "    </div>\n"
     else:
         body = _empty_body("热点/异动板块数据暂缺。")
     S.append(_panel("热点与异动板块", "申万行业涨跌 TOP", body))
