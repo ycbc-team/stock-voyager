@@ -276,31 +276,7 @@ def write_html(path, result):
         kpis.append(kpi("涨跌行业数", "", f"{up_n}↑ / {dn_n}↓", "up", f"共 {len(sw)} 个行业", "flat", "涨多/跌少", "up"))
 
     kpi_html = '    <div class="kpis">\n' + "\n".join(kpis) + "\n    </div>\n" if kpis else _empty_body("市场 KPI 数据暂缺。")
-    if sw:
-        ins = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"], reverse=True)[:2]
-        outs = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"])[:2]
-        in_tx = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in ins) or "—"
-        out_tx = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in outs) or "—"
-        in_n = sum(1 for x in sw if x.get("main_net_in") and x["main_net_in"] > 0)
-        out_n = sum(1 for x in sw if x.get("main_net_in") and x["main_net_in"] < 0)
-        in_sum_all = sum(x["main_net_in"] for x in sw if x.get("main_net_in") and x["main_net_in"] > 0)
-        top2_sum = sum(x["main_net_in"] for x in ins)
-        top2_pct = (top2_sum / in_sum_all * 100) if in_sum_all > 0 else 0
-        stat = f'全市场 <b class="up">{in_n}</b> 个行业净流入 · <b class="down">{out_n}</b> 个行业净流出 · 前 2 行业占净流入 <b>{top2_pct:.0f}%</b>'
-        ml = (
-            '    <div class="mainline"><div class="ml-label">\n'
-            '      <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L4.5 13.5H11L9.5 22 19 9.5h-6.5L13 2z" fill="var(--cyan)" opacity=".85"/></svg>\n      今日资金主线\n'
-            f'    </div><div class="ml-item"><span class="dot" style="background:var(--up);box-shadow:0 0 8px var(--up)"></span><b class="up">主力净流入居前</b> {in_tx}</div>'
-            f'<div class="ml-item"><span class="dot" style="background:var(--down);box-shadow:0 0 8px var(--down)"></span><b class="down">主力净流出居前</b> {out_tx}</div>'
-            f'<div class="ml-stat">{stat}</div></div>\n'
-        )
-    else:
-        ml = (
-            '    <div class="mainline"><div class="ml-label">\n'
-            '      <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L4.5 13.5H11L9.5 22 19 9.5h-6.5L13 2z" fill="var(--cyan)" opacity=".85"/></svg>\n      今日资金主线\n'
-            '    </div><div class="ml-item"><span class="arrow">申万行业数据暂缺，无法构造资金主线。</span></div></div>\n'
-        )
-    S.append(_panel("核心市场总览", "收盘口径", kpi_html + ml))
+    S.append(_panel("核心市场总览", "收盘口径", kpi_html))
 
     if sw:
         in_sum = sum(h_yi(x["main_net_in"]) for x in sw if x.get("main_net_in") and x["main_net_in"] > 0)

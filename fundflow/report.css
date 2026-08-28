@@ -214,7 +214,7 @@
 
   /* ===== VERDICT (盘面定调) ===== */
   .vb-body{display:flex;flex-direction:column;gap:14px}
-  .vb-text{font-size:15px;line-height:1.85;color:var(--txt);font-weight:600;letter-spacing:.3px}
+  .vb-text{font-size:13px;line-height:1.7;color:var(--txt);font-weight:600;letter-spacing:.3px}
   .vb-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .vb-meta.vb-inline{margin-left:14px;flex:none;white-space:nowrap}
   .vb-tone{font-size:11px;font-family:var(--mono);padding:4px 12px;border-radius:12px;letter-spacing:.6px;font-weight:700}
