@@ -544,6 +544,79 @@ def _dedupe_texts(items: List[str]) -> List[str]:
     return out
 
 
+def generate_market_verdict(report_data: Dict[str, Any]) -> Dict[str, Any]:
+    """根据已抓取的收盘数据，规则化生成一句话『盘面定调』。
+
+    纯数据驱动、无外部依赖、不调用任何模型：
+      输入全部来自 collect_report_data 已产出的字段（指数/行业/主题/北向），
+      输出一句确定性中文摘要 + 基调标签（偏强/偏弱/震荡），供 HTML 顶部横幅展示。
+    """
+    indices = report_data.get("indices") or []
+    sw = report_data.get("sw_industry") or []
+    sp = report_data.get("style_proxy") or []
+    nb = report_data.get("northbound") or {}
+
+    # 1) 大盘方向：核心指数涨跌幅均值
+    core_names = ("上证指数", "深证成指", "创业板指")
+    core_pcts = [x["pct"] for x in indices if x.get("name") in core_names and x.get("pct") is not None]
+    avg_pct = (sum(core_pcts) / len(core_pcts)) if core_pcts else None
+
+    # 2) 主题强弱（style_proxy 已按申万行业聚合）
+    sp_sorted = sorted(sp, key=lambda x: x.get("pct") or 0)
+    lead_theme = sp_sorted[-1] if sp_sorted else None
+    weak_theme = sp_sorted[0] if sp_sorted else None
+
+    # 3) 行业：领涨 / 主力净流入居前
+    sw_pct = sorted([x for x in sw if x.get("pct") is not None], key=lambda x: x["pct"], reverse=True)
+    sw_net = sorted([x for x in sw if x.get("main_net_in") is not None], key=lambda x: x["main_net_in"], reverse=True)
+    top_net = sw_net[:2] if sw_net else []
+
+    # 4) 北向成交占比
+    nb_ratio = nb.get("turnover_ratio")
+
+    clauses = []
+    if lead_theme and lead_theme.get("pct") is not None:
+        lt = lead_theme["pct"]
+        verb = "领涨" if lt >= 0 else "相对抗跌"
+        clauses.append(f"{lead_theme['name']}（{lt:+.2f}%）{verb}")
+    if top_net:
+        net_names = "、".join(x["name"] for x in top_net)
+        clauses.append(f"{net_names}主力净流入居前")
+    if weak_theme and weak_theme is not lead_theme and (weak_theme.get("pct") or 0) < 0:
+        clauses.append(f"{weak_theme['name']}（{weak_theme['pct']:+.2f}%）承压")
+
+    part1 = "，".join(clauses)
+
+    if avg_pct is not None:
+        if avg_pct > 0:
+            idx_txt = f"主要指数收涨 {avg_pct:+.2f}%"
+        elif avg_pct < 0:
+            idx_txt = f"主要指数收跌 {avg_pct:+.2f}%"
+        else:
+            idx_txt = "主要指数持平"
+    else:
+        idx_txt = "主要指数数据暂缺"
+    nb_txt = f"北向成交占比 {nb_ratio * 100:.1f}%" if nb_ratio is not None else "北向占比暂缺"
+
+    if avg_pct is None:
+        tone, tone_word = "flat", "方向不明"
+    elif avg_pct > 0.15:
+        tone, tone_word = "up", "偏强"
+    elif avg_pct < -0.15:
+        tone, tone_word = "down", "偏弱"
+    else:
+        tone, tone_word = "flat", "震荡"
+
+    if part1:
+        headline = f"{part1}；{idx_txt}，{nb_txt}，整体{tone_word}。"
+    elif avg_pct is not None or nb_ratio is not None:
+        headline = f"{idx_txt}，{nb_txt}，整体{tone_word}。"
+    else:
+        headline = "当日数据暂缺，无法生成盘面定调。"
+
+    return {"headline": headline, "tone": tone, "tone_word": tone_word, "avg_pct": avg_pct}
+
+
 def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose: bool = True) -> Dict[str, Any]:
     reset_request_count()
     resolved_date = data_date or detect_trade_date("ashare")
@@ -606,7 +679,7 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
     hotspots = compute_hotspots(sw_list)
 
     overall_source = SOURCE_SW if (sw_list or northbound["available"] or top_in) else "腾讯gtimg(指数回退)+AKShare/东方财富(受限)"
-    return {
+    result = {
         "data_date": resolved_date,
         "source": overall_source,
         "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -632,6 +705,8 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
             "northbound": _build_filename("fundflow_northbound", resolved_date),
         },
     }
+    result["market_verdict"] = generate_market_verdict(result)
+    return result
 
 
 def write_report_json(result: Dict[str, Any], out_dir: Optional[str] = None) -> str:

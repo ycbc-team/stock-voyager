@@ -249,6 +249,16 @@ def write_html(path, result):
     for warning in result.get("fetch_warnings") or []:
         S.append(f'  <div class="style-note"><b style="color:var(--amber)">⚠ 数据抓取提示</b> ｜ {warning}</div>\n')
 
+    mv = result.get("market_verdict") or {}
+    if mv.get("headline"):
+        S.append(
+            f'  <div class="verdict tone-{mv.get("tone", "flat")}">\n'
+            f'    <div class="v-tag">盘面定调</div>\n'
+            f'    <div class="v-body">{mv["headline"]}</div>\n'
+            f'    <div class="v-badge">{mv.get("tone_word", "")}</div>\n'
+            f'  </div>\n'
+        )
+
     S.append(_panel("今日解读", "盘后速览", build_market_views(result)))
 
     idx_rows = []
