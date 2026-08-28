@@ -80,7 +80,7 @@
   .idx-table td{text-align:right;padding:9px 10px;border-bottom:1px solid rgba(30,39,56,.6)}
   .idx-table td:first-child{text-align:left;color:var(--txt);font-family:var(--sans);font-weight:600}
   .idx-table tr:hover td{background:rgba(56,189,248,.04)}
-  .idx-table .code{color:var(--txt3);font-size:10px;font-family:var(--mono);margin-left:6px}
+  .idx-table .code{color:var(--txt3);font-size:10px;font-family:var(--mono);margin-top:2px;line-height:1.4}
   .idx-table .up{color:var(--up);font-weight:700}
   .idx-table .down{color:var(--down);font-weight:700}
   .idx-table .flat{color:var(--txt2);font-weight:700}

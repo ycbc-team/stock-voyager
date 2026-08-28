@@ -195,22 +195,18 @@ def write_html(path, result):
         prev = (x["close"] - x["chg"]) if (x["close"] is not None and x["chg"] is not None) else None
         close_s = f'{x["close"]:,.2f}' if x["close"] is not None else "—"
         prev_s = f"{prev:,.2f}" if prev is not None else "—"
-        chg_s = f'{x["chg"]:+,.2f}' if x["chg"] is not None else "—"
-        amt_s = h_amount(x.get("turnover"))
         idx_rows.append(
             f'      <tr>\n'
-            f'        <td>{x["name"]}<span class="code">{idx_prefix(x["code"])}{x["code"]}</span></td>\n'
+            f'        <td>{x["name"]}<div class="code">{idx_prefix(x["code"])}{x["code"]}</div></td>\n'
             f'        <td style="color:var(--txt);font-weight:700">{close_s}</td>\n'
             f'        <td class="{cls}">{pct_s}</td>\n'
-            f'        <td class="{cls}">{chg_s}</td>\n'
             f'        <td style="color:var(--txt3)">{prev_s}</td>\n'
-            f'        <td style="color:var(--txt2)">{amt_s}</td>\n'
             f'      </tr>'
         )
     if idx_rows:
         body = (
             '    <table class="idx-table">\n      <thead>\n'
-            '        <tr><th>指数</th><th>收盘点位</th><th>涨跌幅</th><th>涨跌点</th><th>昨收</th><th>成交额</th></tr>\n'
+            '        <tr><th>指数</th><th>收盘点位</th><th>涨跌幅</th><th>昨收</th></tr>\n'
             '      </thead>\n      <tbody>\n' + "\n".join(idx_rows) + '\n      </tbody>\n    </table>\n'
         )
     else:
