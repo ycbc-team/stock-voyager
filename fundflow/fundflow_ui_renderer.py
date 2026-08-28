@@ -251,12 +251,19 @@ def write_html(path, result):
 
     mv = result.get("market_verdict") or {}
     if mv.get("headline"):
+        tone = mv.get("tone", "flat")
+        tone_word = mv.get("tone_word") or {"up": "整体偏强", "down": "整体偏弱", "flat": "整体震荡"}.get(tone, "—")
         S.append(
-            f'  <div class="verdict tone-{mv.get("tone", "flat")}">\n'
-            f'    <div class="v-tag">盘面定调</div>\n'
-            f'    <div class="v-body">{mv["headline"]}</div>\n'
-            f'    <div class="v-badge">{mv.get("tone_word", "")}</div>\n'
-            f'  </div>\n'
+            '  <div class="panel sec-gap">\n'
+            '    <div class="p-title"><span class="bar"></span>盘面定调\n'
+            '      <span class="vb-meta vb-inline">\n'
+            f'        <span class="vb-tone vb-tone-{tone}">{tone_word}</span>\n'
+            '      </span>\n'
+            '    </div>\n'
+            '    <div class="vb-body">\n'
+            f'      <div class="vb-text">{mv["headline"]}</div>\n'
+            '    </div>\n'
+            '  </div>\n'
         )
 
     S.append(_panel("今日解读", "盘后速览", build_market_views(result)))
