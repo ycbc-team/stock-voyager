@@ -127,84 +127,6 @@ def product_source_text():
     return "公开数据整理"
 
 
-def build_market_views(result):
-    indices = {x["name"]: x for x in result.get("indices", [])}
-    sw = result.get("sw_industry") or []
-    nb = result.get("northbound") or {}
-    style_proxy = result.get("style_proxy") or []
-
-    sh = indices.get("上证指数")
-    sz = indices.get("深证成指")
-    cyb = indices.get("创业板指")
-    up_n = sum(1 for x in sw if (x.get("pct") or 0) > 0)
-    dn_n = sum(1 for x in sw if (x.get("pct") or 0) < 0)
-    breadth_desc = f"行业上涨 {up_n} 个，下跌 {dn_n} 个" if sw else "行业广度数据暂缺"
-    index_desc = "、".join(
-        f"{name}{x['pct']:+.2f}%"
-        for name, x in (("上证", sh), ("深成", sz), ("创业板", cyb))
-        if x and x.get("pct") is not None
-    ) or "核心指数数据暂缺"
-    breadth_rating = "r1" if up_n > dn_n else ("r3" if dn_n > up_n else "r2")
-    breadth_label = "偏强" if up_n > dn_n else ("偏弱" if dn_n > up_n else "均衡")
-
-    net_vals = [x["main_net_in"] for x in sw if x.get("main_net_in") is not None]
-    total_net = sum(net_vals) / 1e8 if net_vals else None
-    top_in = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"], reverse=True)[:2]
-    top_out = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"])[:2]
-    in_desc = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in top_in) or "暂无明显流入主线"
-    out_desc = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in top_out) or "暂无明显流出主线"
-    flow_rating = "r1" if (total_net or 0) > 0 else ("r3" if (total_net or 0) < 0 else "r2")
-    flow_label = "净流入" if (total_net or 0) > 0 else ("净流出" if (total_net or 0) < 0 else "分化")
-    flow_brief = f"申万 31 行业合计 {total_net:+.1f} 亿" if total_net is not None else "行业主力净额暂缺"
-
-    lead_style = None
-    if style_proxy:
-        lead_style = sorted(style_proxy, key=lambda x: x.get("pct") or 0, reverse=True)[0]
-    nb_ratio = nb.get("turnover_ratio")
-    nb_desc = f'北向成交占两市 {nb_ratio * 100:.2f}%' if nb_ratio else "北向占比数据暂缺"
-    style_desc = f'领涨主题：{lead_style["name"]} {lead_style["pct"]:+.2f}%' if lead_style else "主题风格数据暂缺"
-    style_rating = "r1" if lead_style and (lead_style.get("pct") or 0) > 0 else ("r3" if lead_style and (lead_style.get("pct") or 0) < 0 else "r2")
-    style_label = "风格偏多" if lead_style and (lead_style.get("pct") or 0) > 0 else ("风格承压" if lead_style and (lead_style.get("pct") or 0) < 0 else "风格中性")
-
-    cards = [
-        (
-            "v1",
-            "市场概览",
-            breadth_label,
-            breadth_rating,
-            f"<span class=\"k\">{index_desc}</span><br>{breadth_desc}",
-            "聚焦核心指数与行业涨跌家数，适合先看整体强弱。",
-        ),
-        (
-            "v2",
-            "资金主线",
-            flow_label,
-            flow_rating,
-            f"<span class=\"u\">流入：</span>{in_desc}<br><span class=\"d\">流出：</span>{out_desc}",
-            flow_brief,
-        ),
-        (
-            "v3",
-            "风格偏好",
-            style_label,
-            style_rating,
-            f"{style_desc}<br>{nb_desc}",
-            "结合主题代理与北向成交占比，看盘后风格偏向。",
-        ),
-    ]
-
-    html = ['    <div class="views">\n']
-    for cls, title, rating_text, rating_cls, line_html, footer in cards:
-        html.append(
-            f'      <div class="view {cls}">\n'
-            f'        <div class="vh"><div class="vn">{title}</div><span class="rating {rating_cls}">{rating_text}</span></div>\n'
-            f'        <div class="vl">{line_html}</div>\n'
-            f'        <div class="vr">{footer}</div>\n'
-            f'      </div>\n'
-        )
-    html.append("    </div>\n")
-    return "".join(html)
-
 
 def load_result(path):
     with open(path, encoding="utf-8") as f:
@@ -266,7 +188,6 @@ def write_html(path, result):
             '  </div>\n'
         )
 
-    S.append(_panel("今日解读", "盘后速览", build_market_views(result)))
 
     idx_rows = []
     for x in result["indices"]:

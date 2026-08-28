@@ -197,26 +197,11 @@
   .n-active .chip{font-family:var(--mono);background:rgba(56,189,248,.08);border:1px solid rgba(56,189,248,.25);color:var(--cyan);border-radius:14px;padding:3px 10px;font-size:10.5px}
   .n-note{margin-top:10px;font-size:10px;color:var(--txt3);line-height:1.6;font-family:var(--mono)}
 
-  /* ===== VIEWS ===== */
-  .views{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-  @media(max-width:1080px){.views{grid-template-columns:1fr}}
-  .view{background:linear-gradient(180deg,#121d31,#0d1424);border:1px solid var(--line);border-radius:12px;padding:16px 17px;position:relative;overflow:hidden;display:flex;flex-direction:column;gap:10px;box-shadow:0 6px 18px rgba(0,0,0,.35)}
-  .view::after{content:"";position:absolute;top:0;left:0;right:0;height:2px}
-  .view.v1::after{background:linear-gradient(90deg,var(--up),transparent)}
-  .view.v2::after{background:linear-gradient(90deg,var(--amber),transparent)}
-  .view.v3::after{background:linear-gradient(90deg,var(--down),transparent)}
-  .view .vh{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-  .view .vh .vn{font-size:15px;font-weight:800}
-  .view .vh .sub{font-size:10.5px;color:var(--txt3);font-family:var(--mono)}
+  /* ===== RATING (通用评级徽章，供其他模块复用) ===== */
   .rating{font-size:10.5px;font-weight:700;padding:3px 10px;border-radius:13px;font-family:var(--mono)}
   .r1{color:var(--up-b);background:rgba(246,70,93,.12);border:1px solid rgba(246,70,93,.4)}
   .r2{color:var(--amber);background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.35)}
   .r3{color:var(--down-b);background:rgba(14,203,129,.1);border:1px solid rgba(14,203,129,.35)}
-  .view .vl{font-size:12px;color:var(--txt);line-height:1.85}
-  .view .vl .k{color:var(--cyan);font-weight:700}
-  .view .vl .d{color:var(--down-b)}
-  .view .vl .u{color:var(--up-b)}
-  .view .vr{margin-top:auto;font-size:10.5px;color:var(--txt3);line-height:1.6;border-top:1px dashed var(--line);padding-top:9px}
 
   /* ===== FOOTER ===== */
   .foot{margin-top:20px;font-size:10.5px;color:var(--txt3);line-height:1.9;font-family:var(--mono);border:1px dashed var(--line);border-radius:10px;padding:13px 16px;background:rgba(13,19,34,.6)}
