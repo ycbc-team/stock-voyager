@@ -617,6 +617,54 @@ def generate_market_verdict(report_data: Dict[str, Any]) -> Dict[str, Any]:
     return {"headline": headline, "tone": tone, "tone_word": tone_word, "avg_pct": avg_pct}
 
 
+def fetch_market_breadth(data_date: str) -> Dict[str, Any]:
+    """抓取全市场个股涨跌家数 + 涨停/跌停数量（AKShare 东方财富源）。
+
+    口径：收盘快照；剔除北交所（代码 8 开头 / 920 开头）以对齐沪深A股广度惯例。
+    单源失败不影响整体，缺失字段置 None，由渲染层显示「—」。
+    """
+    ak = get_akshare()
+    warnings: List[str] = []
+    out: Dict[str, Any] = {
+        "available": False,
+        "advance": None,
+        "decline": None,
+        "flat": None,
+        "limit_up": None,
+        "limit_down": None,
+        "source": "",
+        "warnings": warnings,
+    }
+    yyyymmdd = str(data_date).replace("-", "")
+
+    # 1) 涨停 / 跌停 池（东方财富，仅近 30 交易日）
+    try:
+        zt = call_akshare_with_retry("涨停池", ak.stock_zt_pool_em, date=yyyymmdd)
+        dt = call_akshare_with_retry("跌停池", ak.stock_zt_pool_dtgc_em, date=yyyymmdd)
+        out["limit_up"] = int(len(zt)) if zt is not None else None
+        out["limit_down"] = int(len(dt)) if dt is not None else None
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"涨停/跌停池获取失败: {e}")
+
+    # 2) 全市场个股涨跌家数（东方财富 spot）
+    try:
+        spot = call_akshare_with_retry("全市场涨跌家数", ak.stock_zh_a_spot_em)
+        if spot is not None and len(spot) > 0:
+            codes = spot["代码"].astype(str)
+            keep = ~codes.str.startswith(("8", "920"))  # 剔除北交所
+            df = spot[keep]
+            pct = df["涨跌幅"].astype(float, errors="coerce")
+            out["advance"] = int((pct > 0).sum())
+            out["decline"] = int((pct < 0).sum())
+            out["flat"] = int(((pct == 0) & df["成交量"].notna()).sum())
+            out["source"] = "东方财富个股行情"
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"全市场涨跌家数获取失败: {e}")
+
+    out["available"] = any(v is not None for v in (out["advance"], out["limit_up"]))
+    return out
+
+
 def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose: bool = True) -> Dict[str, Any]:
     reset_request_count()
     resolved_date = data_date or detect_trade_date("ashare")
@@ -671,6 +719,12 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
     if not northbound["available"]:
         fetch_warnings.append(f"北向资金数据异常：{northbound['source']}")
 
+    breadth = fetch_market_breadth(resolved_date)
+    if verbose:
+        print(f"[+] 个股涨跌家数: {'可用' if breadth['available'] else '暂不可用'}（{breadth['source'] or '—'}）")
+    for w in breadth.get("warnings", []):
+        fetch_warnings.append(w)
+
     style_proxy = compute_style_proxy(sw_list)
     if verbose:
         print(f"[+] 风格代理: {len(style_proxy)} 条主题（金融防御/医药景气/科技成长/周期资源）")
@@ -688,6 +742,7 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
         "sw_industry": sw_list,
         "sw_industry_source": sw_source,
         "northbound": northbound,
+        "breadth": breadth,
         "two_market": {"sh": sh_amount, "sz": sz_amount},
         "style_indices": style_indices,
         "style_indices_source": idx_source,

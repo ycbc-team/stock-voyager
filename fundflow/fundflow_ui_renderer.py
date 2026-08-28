@@ -252,7 +252,20 @@ def write_html(path, result):
         total_net = sum(net_vals) / 1e8
         cls = "up" if total_net >= 0 else "down"
         kpis.append(kpi("申万主力净流入", "", f"{total_net:+.1f}亿", cls, "31行业汇总", cls, "涨红/跌绿口径", "up" if total_net >= 0 else "dn"))
-    if sw:
+    br = result.get("breadth") or {}
+    if br.get("available"):
+        adv = br.get("advance")
+        dec = br.get("decline")
+        flat = br.get("flat")
+        lu = br.get("limit_up")
+        ld = br.get("limit_down")
+        bcls = "up" if (adv or 0) >= (dec or 0) else "down"
+        val = f"{adv}↑ / {dec}↓" if adv is not None and dec is not None else "—"
+        chg = f"涨停 {lu} · 跌停 {ld}" if (lu is not None and ld is not None) else "涨停/跌停暂缺"
+        total_n = (adv or 0) + (dec or 0) + (flat or 0)
+        sub = f"共 {total_n:,} 只 · 上涨占比 {adv / total_n * 100:.0f}%" if total_n else "—"
+        kpis.append(kpi("个股涨跌家数", "", val, bcls, chg, "flat", sub, "up" if bcls == "up" else "dn"))
+    elif sw:
         up_n = sum(1 for x in sw if (x.get("pct") or 0) > 0)
         dn_n = sum(1 for x in sw if (x.get("pct") or 0) < 0)
         kpis.append(kpi("涨跌行业数", "", f"{up_n}↑ / {dn_n}↓", "up", f"共 {len(sw)} 个行业", "flat", "涨多/跌少", "up"))
