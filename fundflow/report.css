@@ -108,6 +108,8 @@
   .ml-item .dot{width:7px;height:7px;border-radius:50%}
   .ml-item b{font-weight:700}
   .ml-item .arrow{font-size:10px;color:var(--txt3);font-family:var(--mono)}
+  .ml-stat{font-size:11.5px;color:var(--txt2);margin-top:6px;padding-top:8px;border-top:1px dashed rgba(56,189,248,.18);width:100%;font-family:var(--mono);display:flex;align-items:center;gap:6px}
+  .ml-stat b{font-weight:700}
 
   /* ===== FLOW BARS ===== */
   .flow-wrap{position:relative}

@@ -215,14 +215,15 @@ def write_html(path, result):
 
     idx_by_name = {x["name"]: x for x in result["indices"]}
 
-    def kpi(name, code, val, val_cls, chg, chg_cls, sub, glow=None):
+    def kpi(name, code, val, val_cls, chg, chg_cls, sub, glow=None, chg_extra=None):
         glow_c = f'<div class="glow-{glow}"></div>' if glow else ""
         code_tag = f'<span class="k-code">{code}</span>' if code else ""
+        extra = f' <span class="{chg_extra[1]}">{chg_extra[0]}</span>' if chg_extra else ""
         return (
             f'      <div class="kpi">\n'
             f'        <div class="k-name">{name} {code_tag}</div>\n'
             f'        <div class="k-val {val_cls}">{val}</div>\n'
-            f'        <div class="k-chg {chg_cls}">{chg}</div>\n'
+            f'        <div class="k-chg {chg_cls}">{chg}{extra}</div>\n'
             f'        <div class="k-sub">{sub}</div>\n        {glow_c}</div>'
         )
 
@@ -244,7 +245,12 @@ def write_html(path, result):
     sh, sz = tm.get("sh"), tm.get("sz")
     if sh is not None or sz is not None:
         tot = (sh or 0) + (sz or 0)
-        kpis.append(kpi("两市成交额", "", h_amount(tot), "cyan", f"沪 {h_amount(sh)} · 深 {h_amount(sz)}", "cyan", "收盘口径", "cy"))
+        prev_total = tm.get("prev_total")
+        chg_extra_tm = None
+        if prev_total:
+            pct_chg = (tot - prev_total) / prev_total * 100
+            chg_extra_tm = (f" · 较前一日 {'+' if pct_chg >= 0 else ''}{pct_chg:.1f}%", "up" if pct_chg >= 0 else "down")
+        kpis.append(kpi("两市成交额", "", h_amount(tot), "cyan", f"沪 {h_amount(sh)} · 深 {h_amount(sz)}", "cyan", "收盘口径", "cy", chg_extra=chg_extra_tm))
     if nb.get("turnover_ratio"):
         kpis.append(kpi("北向成交占比", "", f'{nb["turnover_ratio"] * 100:.1f}%', "cyan", "净买入未披露", "flat", "通道成交额口径", "cy"))
     net_vals = [x["main_net_in"] for x in sw if x.get("main_net_in") is not None]
@@ -276,11 +282,18 @@ def write_html(path, result):
         outs = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"])[:2]
         in_tx = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in ins) or "—"
         out_tx = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in outs) or "—"
+        in_n = sum(1 for x in sw if x.get("main_net_in") and x["main_net_in"] > 0)
+        out_n = sum(1 for x in sw if x.get("main_net_in") and x["main_net_in"] < 0)
+        in_sum_all = sum(x["main_net_in"] for x in sw if x.get("main_net_in") and x["main_net_in"] > 0)
+        top2_sum = sum(x["main_net_in"] for x in ins)
+        top2_pct = (top2_sum / in_sum_all * 100) if in_sum_all > 0 else 0
+        stat = f'全市场 <b class="up">{in_n}</b> 个行业净流入 · <b class="down">{out_n}</b> 个行业净流出 · 前 2 行业占净流入 <b>{top2_pct:.0f}%</b>'
         ml = (
             '    <div class="mainline"><div class="ml-label">\n'
             '      <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L4.5 13.5H11L9.5 22 19 9.5h-6.5L13 2z" fill="var(--cyan)" opacity=".85"/></svg>\n      今日资金主线\n'
             f'    </div><div class="ml-item"><span class="dot" style="background:var(--up);box-shadow:0 0 8px var(--up)"></span><b class="up">主力净流入居前</b> {in_tx}</div>'
-            f'<div class="ml-item"><span class="dot" style="background:var(--down);box-shadow:0 0 8px var(--down)"></span><b class="down">主力净流出居前</b> {out_tx}</div></div>\n'
+            f'<div class="ml-item"><span class="dot" style="background:var(--down);box-shadow:0 0 8px var(--down)"></span><b class="down">主力净流出居前</b> {out_tx}</div>'
+            f'<div class="ml-stat">{stat}</div></div>\n'
         )
     else:
         ml = (

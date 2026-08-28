@@ -127,11 +127,12 @@ def _load_or_fetch_build(filename: str, loader):
     return payload
 
 
-def _fetch_market_snapshot_payload() -> Dict[str, Any]:
+def _fetch_market_snapshot_payload(data_date: Optional[str] = None) -> Dict[str, Any]:
     indices: List[Dict[str, Any]] = []
     style_indices: List[Dict[str, Any]] = []
     sh_amount = None
     sz_amount = None
+    prev_total: Optional[float] = None
     source = SOURCE_EM
 
     secids = ",".join(secid for _, secid in INDICES) + "," + ",".join(secid for _, secid in STYLE_INDEX)
@@ -179,6 +180,25 @@ def _fetch_market_snapshot_payload() -> Dict[str, Any]:
         if rows.get("399001"):
             sz_amount = _pick_amount(rows["399001"], "f6", "f7", "f8", "f67")
 
+    if data_date:
+        try:
+            ak = get_akshare()
+            sh_df = call_akshare_with_retry("上证指数日K(取前一日成交额)", ak.stock_zh_index_daily_em, symbol="sh000001")
+            sz_df = call_akshare_with_retry("深证成指日K(取前一日成交额)", ak.stock_zh_index_daily_em, symbol="sz399001")
+            if (
+                sh_df is not None and sz_df is not None
+                and not sh_df.empty and not sz_df.empty
+                and "成交额" in sh_df.columns and "成交额" in sz_df.columns
+            ):
+                sh_df = sh_df.tail(60)
+                sz_df = sz_df.tail(60)
+                sh_mask = sh_df["日期"].astype(str) < data_date
+                sz_mask = sz_df["日期"].astype(str) < data_date
+                if sh_mask.any() and sz_mask.any():
+                    prev_total = float(sh_df.loc[sh_mask].iloc[-1]["成交额"]) + float(sz_df.loc[sz_mask].iloc[-1]["成交额"])
+        except Exception:
+            prev_total = None
+
     if not indices:
         source = SOURCE_GT
         want = {secid.split(".")[1]: name for name, secid in INDICES}
@@ -217,13 +237,13 @@ def _fetch_market_snapshot_payload() -> Dict[str, Any]:
     return {
         "indices": indices,
         "style_indices": style_indices,
-        "two_market": {"sh": sh_amount, "sz": sz_amount},
+        "two_market": {"sh": sh_amount, "sz": sz_amount, "prev_total": prev_total},
         "source": source,
     }
 
 
 def load_or_fetch_market_snapshot(data_date: str) -> Dict[str, Any]:
-    return _load_or_fetch_build(_build_filename("fundflow_market_snapshot", data_date), _fetch_market_snapshot_payload)
+    return _load_or_fetch_build(_build_filename("fundflow_market_snapshot", data_date), lambda: _fetch_market_snapshot_payload(data_date))
 
 
 def _fetch_sw_mapping_payload() -> Dict[str, Any]:
