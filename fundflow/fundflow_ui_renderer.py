@@ -237,8 +237,7 @@ def write_html(path, result):
         x = idx_by_name.get(nm)
         if x and x["close"] is not None:
             pct_s, cls = h_pct(x["pct"])
-            prev = (x["close"] - x["chg"]) if x["chg"] is not None else None
-            sub = f'{prev:,.2f}→{x["close"]:,.2f}' if prev is not None else "—"
+            sub = x.get("idx_note") or "—"
             kpis.append(kpi(nm, pref, f'{x["close"]:,.2f}', cls, pct_s, cls, sub, glow))
 
     tm = result.get("two_market") or {}

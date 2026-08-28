@@ -127,6 +127,38 @@ def _load_or_fetch_build(filename: str, loader):
     return payload
 
 
+def _compute_index_note(df, data_date) -> Optional[str]:
+    """指数卡定性副标：均线定位(A) + 区间高低(B)。失败/数据不足返回 None。"""
+    try:
+        if df is None or getattr(df, "empty", True):
+            return None
+        d = df.copy()
+        d["日期"] = d["日期"].astype(str)
+        if data_date:
+            d = d[d["日期"] <= str(data_date)]
+        if d.empty or "收盘" not in d.columns:
+            return None
+        closes = d["收盘"].astype(float)
+        last = float(closes.iloc[-1])
+        ma_parts = []
+        for n in (5, 10, 20):
+            if len(closes) >= n:
+                ma = float(closes.iloc[-n:].mean())
+                if last > ma:
+                    ma_parts.append(n)
+        ma_txt = f"站上{'/'.join(str(p) for p in ma_parts)}日线" if ma_parts else "跌破均线"
+        win = closes.iloc[-20:] if len(closes) >= 20 else closes
+        range_txt = ""
+        if len(win) >= 2:
+            if last >= float(win.max()):
+                range_txt = "创近20日新高"
+            elif last <= float(win.min()):
+                range_txt = "近20日新低"
+        return ma_txt + (f" · {range_txt}" if range_txt else "")
+    except Exception:
+        return None
+
+
 def _fetch_market_snapshot_payload(data_date: Optional[str] = None) -> Dict[str, Any]:
     indices: List[Dict[str, Any]] = []
     style_indices: List[Dict[str, Any]] = []
@@ -180,24 +212,37 @@ def _fetch_market_snapshot_payload(data_date: Optional[str] = None) -> Dict[str,
         if rows.get("399001"):
             sz_amount = _pick_amount(rows["399001"], "f6", "f7", "f8", "f67")
 
+    # 指数日K：成交额环比(prev_total) + 指数卡定性副标(均线定位+区间高低)
+    index_daily: Dict[str, Any] = {}
     if data_date:
         try:
             ak = get_akshare()
-            sh_df = call_akshare_with_retry("上证指数日K(取前一日成交额)", ak.stock_zh_index_daily_em, symbol="sh000001")
-            sz_df = call_akshare_with_retry("深证成指日K(取前一日成交额)", ak.stock_zh_index_daily_em, symbol="sz399001")
-            if (
-                sh_df is not None and sz_df is not None
-                and not sh_df.empty and not sz_df.empty
-                and "成交额" in sh_df.columns and "成交额" in sz_df.columns
+            for _nm, _sym in (
+                ("上证指数", "sh000001"),
+                ("深证成指", "sz399001"),
+                ("创业板指", "sz399006"),
+                ("科创50", "sh000688"),
             ):
-                sh_df = sh_df.tail(60)
-                sz_df = sz_df.tail(60)
-                sh_mask = sh_df["日期"].astype(str) < data_date
-                sz_mask = sz_df["日期"].astype(str) < data_date
-                if sh_mask.any() and sz_mask.any():
-                    prev_total = float(sh_df.loc[sh_mask].iloc[-1]["成交额"]) + float(sz_df.loc[sz_mask].iloc[-1]["成交额"])
+                try:
+                    index_daily[_nm] = call_akshare_with_retry(f"{_nm}日K", ak.stock_zh_index_daily_em, symbol=_sym)
+                except Exception:
+                    index_daily[_nm] = None
         except Exception:
-            prev_total = None
+            index_daily = {}
+        sh_df = index_daily.get("上证指数")
+        sz_df = index_daily.get("深证成指")
+        if (
+            sh_df is not None and sz_df is not None
+            and not sh_df.empty and not sz_df.empty
+            and "成交额" in sh_df.columns and "成交额" in sz_df.columns
+        ):
+            sh_df = sh_df.tail(60)
+            sz_df = sz_df.tail(60)
+            sh_mask = sh_df["日期"].astype(str) < data_date
+            sz_mask = sz_df["日期"].astype(str) < data_date
+            if sh_mask.any() and sz_mask.any():
+                prev_total = float(sh_df.loc[sh_mask].iloc[-1]["成交额"]) + float(sz_df.loc[sz_mask].iloc[-1]["成交额"])
+
 
     if not indices:
         source = SOURCE_GT
@@ -233,6 +278,11 @@ def _fetch_market_snapshot_payload(data_date: Optional[str] = None) -> Dict[str,
                         "source": SOURCE_GT,
                     }
                 )
+
+    # 指数卡定性副标：均线定位(A)+区间高低(B)，缺失时渲染层显示『—』
+    for _x in indices:
+        _df = index_daily.get(_x.get("name"))
+        _x["idx_note"] = _compute_index_note(_df, data_date) if _df is not None else None
 
     return {
         "indices": indices,
