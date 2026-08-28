@@ -278,41 +278,28 @@ def write_html(path, result):
     kpi_html = '    <div class="kpis">\n' + "\n".join(kpis) + "\n    </div>\n" if kpis else _empty_body("市场 KPI 数据暂缺。")
     S.append(_panel("核心市场总览", "收盘口径", kpi_html))
 
+    # ── 全市场主力资金分布图（置于行业排名上方，无副标题、无图例文字）──
     if sw:
         in_sum = sum(h_yi(x["main_net_in"]) for x in sw if x.get("main_net_in") and x["main_net_in"] > 0)
         out_sum = sum(h_yi(x["main_net_in"]) for x in sw if x.get("main_net_in") and x["main_net_in"] < 0)
         tot_m = in_sum + abs(out_sum)
         in_p = in_sum / tot_m * 100 if tot_m else 0
         out_p = abs(out_sum) / tot_m * 100 if tot_m else 0
-        in_top = sorted([x for x in sw if x.get("main_net_in") and x["main_net_in"] > 0], key=lambda z: z["main_net_in"], reverse=True)[:6]
-        out_top = sorted([x for x in sw if x.get("main_net_in") and x["main_net_in"] < 0], key=lambda z: z["main_net_in"])[:6]
-        in_nm = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in in_top) or "—"
-        out_nm = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in out_top) or "—"
-        body = (
+        dist_html = (
             '    <div class="dist">\n    <div class="dist-bar">\n'
             f'      <div class="seg" style="width:{out_p:.1f}%;background:linear-gradient(90deg,rgba(14,203,129,.55),rgba(14,203,129,.9))" title="流出行业合计 {out_sum:.1f}亿">流出 {out_sum:.1f}亿</div>\n'
             f'      <div class="seg" style="width:{in_p:.1f}%;background:linear-gradient(90deg,rgba(246,70,93,.6),rgba(246,70,93,.95))" title="流入行业合计 {in_sum:.1f}亿">流入 {in_sum:.1f}亿</div>\n'
-            f'    </div>\n    <div class="dist-legend"><div class="it"><span class="sw" style="background:rgba(246,70,93,.9)"></span>{in_nm}</div><div class="it"><span class="sw" style="background:rgba(14,203,129,.9)"></span>{out_nm}</div></div></div>\n'
+            f'    </div></div>\n'
         )
     else:
-        body = _empty_body("申万行业数据暂缺，无法汇总主力资金分布。")
-    S.append(_panel("全市场主力资金分布", "按申万31行业汇总", body))
+        dist_html = _empty_body("申万行业数据暂缺，无法汇总主力资金分布。")
 
+    # ── 申万一级行业主力净流入（全行业排名，无副标题、数值不带涨跌幅）──
     if sw:
-        cells = []
-        for x in sorted(sw, key=lambda z: (z.get("pct") or 0), reverse=True):
-            cells.append(
-                f'      <div class="hcell" style="{heat_bg(x["pct"])}">\n'
-                f'        <div class="hn">{x["name"]}</div>\n'
-                f'        <div class="hp">{x["pct"]:+.2f}%</div>\n'
-                f'        <div class="hf">主力 {h_yi_signed(x["main_net_in"])}亿</div>\n'
-                f'      </div>'
-            )
-        heat = '    <div class="heat">\n' + "\n".join(cells) + "\n    </div>\n"
-        top = sorted([x for x in sw if x.get("main_net_in") is not None], key=lambda z: abs(z["main_net_in"]), reverse=True)[:12]
-        maxv = max(abs(x["main_net_in"]) for x in top) if top else 1
+        all_sorted = sorted([x for x in sw if x.get("main_net_in") is not None], key=lambda z: z["main_net_in"], reverse=True)
+        maxv = max(abs(x["main_net_in"]) for x in all_sorted) if all_sorted else 1
         rows = []
-        for x in top:
+        for x in all_sorted:
             v = x["main_net_in"]
             width = (abs(h_yi(v)) / h_yi(maxv) * 46) if maxv else 0
             if v >= 0:
@@ -321,13 +308,12 @@ def write_html(path, result):
                 bar = f'<div class="bar out" style="width:{width:.1f}%"><span class="v">{h_yi(v):.1f}亿</span></div>'
             rows.append(f'      <div class="flow-row"><div class="fn">{x["name"]}</div><div class="fb">{bar}</div><div class="fn"></div></div>')
         flow = (
-            '    <div class="p-title" style="margin-top:14px;margin-bottom:8px"><span class="bar"></span>行业主力净流入 TOP（红=净流入 / 绿=净流出）</div>\n'
             '    <div class="flow-wrap"><div class="flow-axis"></div>\n' + "\n".join(rows) + "\n    </div>\n"
         )
-        body = heat + flow
+        body = dist_html + flow
     else:
-        body = _empty_body("申万行业数据暂缺，无法绘制热力图与资金流条形。")
-    S.append(_panel("申万一级行业热力图", "31 行业 · 涨红跌绿", body))
+        body = _empty_body("申万行业数据暂缺，无法绘制资金流条形。")
+    S.append(_panel("申万一级行业主力净流入", "31 行业 · 涨红跌绿", body))
 
     ti, to = result["stock_top_in"], result["stock_top_out"]
     if ti or to:
