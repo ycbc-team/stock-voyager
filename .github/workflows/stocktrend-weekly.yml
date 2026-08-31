@@ -1,0 +1,86 @@
+# A股 / 港股 个股走势 —— 每周五自动生成并部署 GitHub Pages
+#
+# 触发：
+#   - schedule  : 每周五 17:01（北京时间）= 09:01 UTC 收盘后运行一次
+#   - workflow_dispatch : 支持手动触发
+#
+# 只重新生成两个走势 tab（stocktrend_ashare.html / stocktrend_hk.html）；
+# 资金流日报（fundflow.html）与导航首页保持「每日更新」，本流程从已部署站点拉回，
+# 随走势页一起重新发布，保证站点完整。
+name: A股港股走势-每周五
+
+on:
+  schedule:
+    - cron: '1 9 * * 5'   # 每周五 09:01 UTC = 17:01 北京时间（与每日资金流错开 1 小时，避免部署冲突）
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 生成两个走势 tab（每周五刷新一次）
+        env:
+          TZ: Asia/Shanghai
+          REQ_DELAY: '0.4'   # 请求间隔，避免触发数据源限流
+        run: |
+          . .venv/bin/activate
+          python main.py --only stocktrend
+          echo "--- build/site 内容 ---"
+          ls -la build/site/
+
+      - name: 拉回已部署的资金流日报与导航首页（保持每日版本不变）
+        run: |
+          mkdir -p build/site
+          BASE="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY##*/}/"
+          for f in fundflow.html index.html; do
+            echo "尝试拉回 $BASE$f"
+            curl -fsSL "$BASE$f" -o "build/site/$f" || echo "（首次运行或暂缺，跳过 $f）"
+          done
+          echo "--- build/site 最终内容 ---"
+          ls -la build/site/
+
+      - name: 检查报告生成
+        run: |
+          test -f build/site/stocktrend_ashare.html && echo "✓ A股 stocktrend 已生成"
+          test -f build/site/stocktrend_hk.html && echo "✓ 港股 stocktrend 已生成"
+          test -f build/site/fundflow.html && echo "✓ 资金流日报已保留"
+          test -f build/site/index.html && echo "✓ 导航首页已保留"
+
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+
+      - name: 上传站点产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/site
+
+      - name: 部署到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -39,37 +39,32 @@ def build_stocktrend_report(data_date: str | None = None, out_dir: str | None = 
     return {"json_paths": json_paths, "html_paths": html_paths, "pages": pages}
 
 
-def build_site_index(fundflow_result: Dict, stocktrend_result: Dict, out_dir: str | None = None) -> str:
+def build_site_index(fundflow_result: Dict | None = None, stocktrend_result: Dict | None = None, out_dir: str | None = None) -> str:
     target_dir = out_dir or default_site_dir()
     os.makedirs(target_dir, exist_ok=True)
 
-    trade_date = fundflow_result.get("result", {}).get("data_date") or "最新交易日"
+    # 三个 tab 固定展示，不依赖本次是否重新生成 stocktrend（拆分构建频率后另一组页面可能来自已部署站点）
+    trade_date = (fundflow_result or {}).get("result", {}).get("data_date") or "最新交易日"
     cards = [
         {
             "title": "A股资金流日报",
             "href": "fundflow.html",
             "badge": "先看市场",
             "description": "看市场强弱、行业热力图、主力净流入、北向成交占比，适合先把握当天全市场主线。",
-        }
+        },
+        {
+            "title": "A股个股走势",
+            "href": "stocktrend_ashare.html",
+            "badge": "A股清单",
+            "description": "聚焦 32 只核心 A 股，按收盘口径查看估值、位置、资金面、财务与风险提示。",
+        },
+        {
+            "title": "港股个股走势",
+            "href": "stocktrend_hk.html",
+            "badge": "港股清单",
+            "description": "查看港股代表标的的收盘快照、估值、南向持股和分红信息，适合和 A 股页并列浏览。",
+        },
     ]
-    if "ashare" in stocktrend_result.get("pages", {}):
-        cards.append(
-            {
-                "title": "A股个股走势",
-                "href": "stocktrend_ashare.html",
-                "badge": "A股清单",
-                "description": "聚焦 32 只核心 A 股，按收盘口径查看估值、位置、资金面、财务与风险提示。",
-            }
-        )
-    if "hk" in stocktrend_result.get("pages", {}):
-        cards.append(
-            {
-                "title": "港股个股走势",
-                "href": "stocktrend_hk.html",
-                "badge": "港股清单",
-                "description": "查看港股代表标的的收盘快照、估值、南向持股和分红信息，适合和 A 股页并列浏览。",
-            }
-        )
 
     html = render_site_index(
         title="stock-voyager 静态报告导航",
@@ -89,20 +84,39 @@ def main() -> Dict:
     parser.add_argument("--out", help="页面 JSON 输出目录（默认 <项目根>/build/data）")
     parser.add_argument("--topn", type=int, default=10, help="fundflow 个股资金流 TOP 数量")
     parser.add_argument("--stocktrend-market", choices=["all", "ashare", "hk"], default="all", help="stocktrend 输出市场")
+    parser.add_argument(
+        "--only",
+        choices=["all", "fundflow", "stocktrend"],
+        default="all",
+        help="只构建指定页面：fundflow=资金流日报（每日更新）/ stocktrend=两个走势 tab（每周五更新）",
+    )
     args = parser.parse_args()
 
-    fundflow_result = build_fundflow_report(data_date=args.date, out_dir=args.out, topn=args.topn, verbose=True)
-    stocktrend_result = build_stocktrend_report(data_date=args.date, out_dir=args.out, market=args.stocktrend_market)
-    index_path = build_site_index(fundflow_result, stocktrend_result)
+    fundflow_result = None
+    stocktrend_result = None
+    index_path = None
+
+    if args.only in ("all", "fundflow"):
+        fundflow_result = build_fundflow_report(data_date=args.date, out_dir=args.out, topn=args.topn, verbose=True)
+
+    if args.only in ("all", "stocktrend"):
+        stocktrend_result = build_stocktrend_report(data_date=args.date, out_dir=args.out, market=args.stocktrend_market)
+
+    if args.only in ("all", "fundflow"):
+        # 资金流刷新时同步重建导航首页；走势页由「已部署站点」保留，不在此重算
+        index_path = build_site_index(fundflow_result, stocktrend_result)
 
     print("\n[✓] 页面产物已写出：")
-    print(f"    site index : {index_path}")
-    print(f"    fundflow JSON : {fundflow_result['json_path']}")
-    print(f"    fundflow HTML : {fundflow_result['html_path']}")
-    for path in stocktrend_result["json_paths"]:
-        print(f"    stocktrend JSON : {path}")
-    for path in stocktrend_result["html_paths"]:
-        print(f"    stocktrend HTML : {path}")
+    if index_path:
+        print(f"    site index : {index_path}")
+    if fundflow_result:
+        print(f"    fundflow JSON : {fundflow_result['json_path']}")
+        print(f"    fundflow HTML : {fundflow_result['html_path']}")
+    if stocktrend_result:
+        for path in stocktrend_result["json_paths"]:
+            print(f"    stocktrend JSON : {path}")
+        for path in stocktrend_result["html_paths"]:
+            print(f"    stocktrend HTML : {path}")
     return {"index_path": index_path, "fundflow": fundflow_result, "stocktrend": stocktrend_result}
 
 
