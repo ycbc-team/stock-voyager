@@ -33,6 +33,7 @@ from common.market_data import reset_request_count
 from common.market_data import to_float
 from common.storage import save_data_json
 from common.storage import write_json
+from common.storage import load_build_json
 
 from fundflow.fundflow_data_fetcher import SOURCE_EM
 from fundflow.fundflow_data_fetcher import STYLE_PROXY
@@ -215,6 +216,23 @@ def enrich_sw_with_limit_stocks(breadth: Dict[str, Any], sw_list: List[Dict[str,
         it["dt"] = dt
 
 
+def _enrich_northbound_pct_chg(nb: Dict[str, Any], data_date: str) -> None:
+    """北向成交额环比（A3）：读 build/cache 前一日北向缓存，算成交额环比。纯本地读取，零请求。"""
+    try:
+        d = datetime.datetime.strptime(data_date, "%Y-%m-%d") - datetime.timedelta(days=1)
+        prev_date = d.strftime("%Y-%m-%d")
+    except Exception:
+        return
+    prev = load_build_json(_build_filename("fundflow_northbound", prev_date))
+    if not isinstance(prev, dict):
+        return
+    prev_total = to_float(prev.get("total_turnover"))
+    cur_total = to_float(nb.get("total_turnover"))
+    if prev_total and cur_total:
+        nb["prev_total_turnover"] = prev_total
+        nb["turnover_pct_chg"] = (cur_total - prev_total) / prev_total * 100
+
+
 def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose: bool = True) -> Dict[str, Any]:
     reset_request_count()
     resolved_date = data_date or detect_trade_date("ashare")
@@ -267,6 +285,7 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
         print(f"[+] 北向资金: {'可用' if northbound['available'] else '暂不可用'}（{northbound['source']}）")
     if not northbound["available"]:
         fetch_warnings.append(f"北向资金数据异常：{northbound['source']}")
+    _enrich_northbound_pct_chg(northbound, resolved_date)  # A3: 北向成交额环比（读缓存，零请求）
 
     breadth = fetch_market_breadth(resolved_date)
     if verbose:

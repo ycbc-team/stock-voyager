@@ -24,6 +24,7 @@ from common.storage import default_data_dir
 from common.storage import default_site_dir
 from common.site_navigation import render_site_nav
 from common.site_navigation import site_nav_css
+from common.market_data import to_float
 
 
 _WEEK = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -346,14 +347,30 @@ def write_html(path, result):
 
 
     if nb.get("available"):
-        t_r = f'{nb["turnover_ratio"] * 100:.2f}%' if nb.get("turnover_ratio") else "—"
+        t_r_val = (to_float(nb.get("turnover_ratio")) * 100) if nb.get("turnover_ratio") is not None else 0.0
+        t_r = f"{t_r_val:.2f}%" if nb.get("turnover_ratio") else "—"
+        # A3 北向成交额环比（读前一日缓存，processor 已算好）
+        pct_chg = nb.get("turnover_pct_chg")
+        chg_html = ""
+        if pct_chg is not None:
+            cls = "up" if pct_chg >= 0 else "down"
+            sign = "+" if pct_chg >= 0 else ""
+            chg_html = f'<div class="n-sub"><span class="n-chg {cls}">较前一日 {sign}{pct_chg:.1f}%</span></div>'
+        # 双通道占比（文字洞察，非图表）
+        sh = to_float(nb.get("sh_connect_turnover")) or 0.0
+        sz = to_float(nb.get("sz_connect_turnover")) or 0.0
+        tot = sh + sz
+        bigger = "沪股通" if sh >= sz else "深股通"
+        sh_r = (sh / tot * 100) if tot else 0.0
+        sz_r = (sz / tot * 100) if tot else 0.0
         body = (
             '    <div class="nkpis">\n'
             f'      <div class="nkpi"><div class="nl">沪股通成交额</div><div class="nv">{h_amount(nb["sh_connect_turnover"])}</div></div>\n'
             f'      <div class="nkpi"><div class="nl">深股通成交额</div><div class="nv">{h_amount(nb["sz_connect_turnover"])}</div></div>\n'
-            f'      <div class="nkpi"><div class="nl">北向合计成交额</div><div class="nv">{h_amount(nb["total_turnover"])}</div></div>\n'
+            f'      <div class="nkpi"><div class="nl">北向合计成交额</div><div class="nv">{h_amount(nb["total_turnover"])}</div>{chg_html}</div>\n'
             f'      <div class="nkpi"><div class="nl">成交占比(占两市)</div><div class="nv">{t_r}</div></div>\n'
             '    </div>\n'
+            f'    <div class="n-flow"><div class="ch"><div class="ct">更活跃通道</div><div class="cv">{bigger} 占优</div></div><div class="ch"><div class="ct">两通道占比</div><div class="cv">沪 {sh_r:.1f}% · 深 {sz_r:.1f}%</div></div></div>\n'
             '    <div class="n-note">⚠ 北向净买入自 2024-08-19 起不再实时披露，本页仅展示公开的【成交额】与【成交占比】，不展示/不编造净买入数字。</div>\n'
         )
     else:
