@@ -344,31 +344,6 @@ def write_html(path, result):
         body = _empty_body("个股资金流数据暂缺。")
     S.append(_panel("个股资金流排行", "主力净额 · 收盘", body))
 
-    si = result["style_indices"]
-    sp = result["style_proxy"]
-    if si or sp:
-        parts = []
-        if si:
-            rws = []
-            for x in si:
-                pct_s, cls = h_pct(x["pct"])
-                rws.append(f'      <tr><td>{x["name"]}</td><td style="color:var(--txt);font-weight:700">{x["close"]:,.2f}</td><td class="{cls}">{pct_s}</td></tr>')
-            parts.append('    <table class="idx-table">\n      <thead><tr><th>风格指数</th><th>收盘</th><th>涨跌幅</th></tr></thead>\n      <tbody>\n' + "\n".join(rws) + '\n      </tbody>\n    </table>\n')
-        if sp:
-            bars = []
-            for x in sp:
-                pct_s, _ = h_pct(x["pct"])
-                width = min(abs(x["pct"]) / 3 * 50, 50)
-                if x["pct"] >= 0:
-                    bar = f'<div class="sa-fill" style="left:50%;width:{width:.1f}%;background:linear-gradient(90deg,rgba(246,70,93,.4),rgba(246,70,93,.95))"></div>'
-                else:
-                    bar = f'<div class="sa-fill" style="right:50%;width:{width:.1f}%;background:linear-gradient(270deg,rgba(14,203,129,.4),rgba(14,203,129,.95))"></div>'
-                bars.append(f'      <div class="sa-bar"><div class="mid"></div>{bar}<span style="position:absolute;{"left" if x["pct"] >= 0 else "right"}:8px;top:5px;font-family:var(--mono);font-size:10.5px;color:var(--txt2)">{x["name"]} {pct_s}</span></div>')
-            parts.append('    <div class="style-axis"><div class="sa-title"><span>主题代理（申万行业聚合）</span><span>跌 ◀ 　 ▶ 涨</span></div>\n' + "\n".join(bars) + "\n    </div>\n")
-        body = "\n".join(parts)
-    else:
-        body = _empty_body("风格指数数据暂缺。")
-    S.append(_panel("风格与主题", "国证风格 + 主题聚合", body))
 
     if nb.get("available"):
         t_r = f'{nb["turnover_ratio"] * 100:.2f}%' if nb.get("turnover_ratio") else "—"

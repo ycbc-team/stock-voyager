@@ -79,9 +79,23 @@ def compute_style_proxy(sw_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     by_code = {row["code"]: row for row in sw_list}
     out = []
     for name, codes in STYLE_PROXY.items():
-        pcts = [to_float(by_code[code]["pct"]) for code in codes if code in by_code and to_float(by_code[code]["pct"]) is not None]
-        if pcts:
-            out.append({"name": name, "pct": sum(pcts) / len(pcts), "members": [by_code[code]["name"] for code in codes if code in by_code]})
+        present = [by_code[c] for c in codes if c in by_code]
+        pcts = [to_float(r["pct"]) for r in present if to_float(r.get("pct")) is not None]
+        if not pcts:
+            continue
+        net_vals = [to_float(r.get("main_net_in")) for r in present if to_float(r.get("main_net_in")) is not None]
+        out.append(
+            {
+                "name": name,
+                "pct": sum(pcts) / len(pcts),
+                "main_net_in": sum(net_vals) if net_vals else None,  # A3: 主题主力净流入(聚合申万行业)
+                "members": [r["name"] for r in present],
+                "constituents": [  # A4: 成分透明(聚合的申万行业及各自涨跌/资金)
+                    {"name": r["name"], "pct": to_float(r.get("pct")), "main_net_in": to_float(r.get("main_net_in"))}
+                    for r in present
+                ],
+            }
+        )
     return out
 
 
@@ -210,12 +224,11 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
 
     market_snapshot = load_or_fetch_market_snapshot(resolved_date)
     indices = market_snapshot.get("indices") or []
-    style_indices = market_snapshot.get("style_indices") or []
     idx_source = market_snapshot.get("source") or SOURCE_EM
     sh_amount = (market_snapshot.get("two_market") or {}).get("sh")
     sz_amount = (market_snapshot.get("two_market") or {}).get("sz")
     if verbose:
-        print(f"[+] 指数 {len(indices)} 条 + 风格 {len(style_indices)} 条（{idx_source}）")
+        print(f"[+] 指数 {len(indices)} 条（{idx_source}）")
 
     sw_mapping, sw_mapping_source = fetch_sw_mapping()
     if verbose:
@@ -283,8 +296,6 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
         "northbound": northbound,
         "breadth": breadth,
         "two_market": {"sh": sh_amount, "sz": sz_amount},
-        "style_indices": style_indices,
-        "style_indices_source": idx_source,
         "style_proxy": style_proxy,
         "stock_top_in": top_in,
         "stock_top_out": top_out,
