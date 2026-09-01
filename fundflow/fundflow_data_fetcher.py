@@ -29,6 +29,8 @@ from common.market_data import call_akshare_with_retry
 from common.market_data import detect_trade_date
 from common.market_data import diff_list
 from common.market_data import em_get
+from common.market_data import em_get_direct
+from common.market_data import FUND_FLOW_BATCH_HOST
 from common.market_data import get_akshare
 from common.market_data import get_request_count
 from common.market_data import http_get
@@ -42,6 +44,7 @@ from common.storage import save_build_json
 from common.storage import save_cache_json
 from common.storage import save_data_json
 from common.storage import write_json
+from stocktrend.stocktrend_static_data import HK_BASE_DATA
 
 INDICES = [
     ("上证指数", "1.000001"),
@@ -550,11 +553,15 @@ def _pool_to_list(df) -> List[Dict[str, Any]]:
         out.append({"code": str(code), "name": str(name) if name is not None else "", "pct": pct})
     return out
 
-def fetch_market_breadth(data_date: str) -> Dict[str, Any]:
+def fetch_market_breadth(data_date: str, stock_rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """抓取全市场个股涨跌家数 + 涨停/跌停数量（AKShare 东方财富源）。
 
     口径：收盘快照；剔除北交所（代码 8 开头 / 920 开头）以对齐沪深A股广度惯例。
     单源失败不影响整体，缺失字段置 None，由渲染层显示「—」。
+
+    兜底：若 AKShare 全市场快照（stock_zh_a_spot_em，底层走 82.push2.eastmoney.com）
+    在当前环境被代理拦截取不到，则复用已抓取的全市场个股资金流快照（stock_rows，
+    走 push2delay.eastmoney.com，沙箱可用）按涨跌幅推导涨跌家数，确保收盘广度不空缺。
     """
     ak = get_akshare()
     warnings: List[str] = []
@@ -598,6 +605,410 @@ def fetch_market_breadth(data_date: str) -> Dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         warnings.append(f"全市场涨跌家数获取失败: {e}")
 
+    # 3) 兜底：AKShare 全市场快照不可用（如沙箱代理拦截 82.push2）时，
+    #    复用已抓取的全市场个股资金流快照（stock_rows，走 push2delay，沙箱可用）按涨跌幅推导。
+    if out["advance"] is None and stock_rows:
+        adv = dec = fl = 0
+        for r in stock_rows:
+            code = str(r.get("code") or "").zfill(6)
+            if code.startswith(("8", "920")):  # 剔除北交所，与上方口径一致
+                continue
+            pct = to_float(r.get("pct"))
+            if pct is None:
+                continue
+            if pct > 0:
+                adv += 1
+            elif pct < 0:
+                dec += 1
+            else:
+                fl += 1
+        if adv or dec or fl:
+            out["advance"] = adv
+            out["decline"] = dec
+            out["flat"] = fl
+            out["source"] = out["source"] or "东方财富全市场个股资金流(涨跌幅推导)"
+            warnings.append("全市场涨跌家数：stock_zh_a_spot_em 不可用，已用全市场个股资金流快照涨跌幅推导。")
+
     out["available"] = any(v is not None for v in (out["advance"], out["limit_up"]))
+    return out
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 港股资金流抓取（镜像 A 股，数据展示模块一一对应）
+#  - 主要指数        → 腾讯 gtimg（hkHSI / hkHSTECH / hkHSCEI / hkHSCCI）
+#  - 个股主力净流入  → 东方财富 push2 116.xxxxx + f62（全港股排行）
+#  - 南向（港股通）  → 东方财富数据中心 RPT_MUTUAL_DEAL_HISTORY（003/004/006）
+#  - 全市场涨跌家数  → AKShare stock_hk_spot_em
+#  - 港股行业分类    → 复用 stocktrend HK_BASE_DATA
+# ════════════════════════════════════════════════════════════════════════════
+HK_INDICES = [
+    ("恒生指数", "hkHSI"),
+    ("恒生科技指数", "hkHSTECH"),
+    ("国企指数", "hkHSCEI"),
+    ("红筹指数", "hkHSCCI"),
+]
+SOURCE_GT_HK = "腾讯财经 gtimg 接口（港股）"
+SOURCE_EM_HK = "东方财富 East Money 公开行情接口（港股 116.xxxxx）"
+SOURCE_AK_HK = "AKShare 港股行情（stock_hk_spot_em）"
+SOURCE_DC_HK = "东方财富数据中心 RPT_MUTUAL_DEAL_HISTORY（港股通成交额/净买入）"
+EM_HK_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+    "Referer": "https://quote.eastmoney.com/",
+    "Accept": "*/*",
+}
+
+
+def hk_secid(code: str) -> str:
+    """港股在东方财富的 secid 格式：116.<5位代码>。"""
+    return f"116.{str(code).zfill(5)}"
+
+
+def _hk_universe_codes() -> List[str]:
+    return [str(s["code"]).zfill(5) for s in HK_BASE_DATA.get("stocks", [])]
+
+
+def _iter_chunks(items: List[str], size: int) -> List[List[str]]:
+    return [items[i:i + size] for i in range(0, len(items), size or 1)]
+
+
+def _fetch_hk_index_snapshot_payload() -> Dict[str, Any]:
+    want_by_name = {name: gt for name, gt in HK_INDICES}
+    codes = ",".join(gt for _, gt in HK_INDICES)
+    text = http_get(f"https://qt.gtimg.cn/q={codes}", headers={"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}, timeout=15, retries=3)
+    indices: List[Dict[str, Any]] = []
+    source = SOURCE_GT_HK
+    if text:
+        for segment in text.split(";"):
+            segment = segment.strip()
+            if not segment.startswith("v_"):
+                continue
+            parts = segment.split("~")
+            if len(parts) < 33:
+                continue
+            name = parts[1]
+            gt = want_by_name.get(name)
+            if not gt:
+                continue
+            indices.append(
+                {
+                    "name": name,
+                    "code": gt,
+                    "close": to_float(parts[3]),
+                    "pct": to_float(parts[32]),
+                    "chg": to_float(parts[31]),
+                    "main_net_in": None,
+                    "turnover": None,
+                    "source": SOURCE_GT_HK,
+                }
+            )
+    return {"indices": indices, "source": source}
+
+
+def load_or_fetch_hk_index_snapshot(data_date: str) -> Dict[str, Any]:
+    return _load_or_fetch_build(_build_filename("fundflow_hk_index", data_date), _fetch_hk_index_snapshot_payload)
+
+
+EM_HK_FUND_FLOW_FS = "m:128+t:3,m:128+t:4,m:128+t:1,m:128+t:2"
+
+
+def _fetch_hk_stock_fundflow_rank_em() -> Tuple[List[Dict[str, Any]], str]:
+    """东方财富全港股资金流排行（按主力净流入 f62 排序）。
+
+    东方财富 clist 接口服务端硬卡 pz=100/页（实测 pz=200/500/1000 均只返 100），
+    故分别取「净流入 TOP100」（po=1）与「净流出 TOP100」（po=0）两页合并去重。
+    该结果为「资金流绝对值最大」的约 200 只，用于个股资金流排行表；行业面板的全覆盖
+    另由 `load_or_fetch_hk_stock_fundflow` 合并 ulist 按代码批量结果保证。
+    """
+    fields = "f12,f14,f2,f3,f62"
+    base = {
+        "pz": "100", "np": "1", "fltt": "2", "invt": "2",
+        "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fid": "f62",
+        "fields": fields, "fs": EM_HK_FUND_FLOW_FS,
+    }
+    host = "https://push2delay.eastmoney.com"
+    rows_by_code: Dict[str, Dict[str, Any]] = {}
+    for po in ("1", "0"):
+        params = {**base, "pn": "1", "po": po}
+        query = urllib.parse.urlencode(params)
+        text = http_get(f"{host}/api/qt/clist/get?{query}", EM_HK_HEADERS, timeout=20, retries=3)
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        for row in diff_list((payload.get("data") or {})):
+            code = str(row.get("f12") or "").zfill(5)
+            if not code or code in rows_by_code:
+                continue
+            pct_raw = to_float(row.get("f3"))
+            rows_by_code[code] = {
+                "code": code,
+                "name": row.get("f14"),
+                "pct": pct_raw / 100 if pct_raw is not None else None,
+                "main_net_in": to_float(row.get("f62")),
+            }
+    rows = list(rows_by_code.values())
+    if not rows:
+        return [], "东方财富延迟行情主机港股排行接口暂不可用"
+    return rows, f"东方财富延迟行情主机全港股资金流排行（净流入/流出各 TOP100，覆盖 {len(rows)} 只）"
+
+
+def _fetch_hk_stock_fundflow_payload() -> Tuple[List[Dict[str, Any]], str]:
+    """回退路径：116.xxxxx 批量，仅覆盖静态标的池（HK_BASE_DATA）。"""
+    codes = _hk_universe_codes()
+    if not codes:
+        return [], "港股静态标的池为空，无法抓取个股资金流"
+    secids = [hk_secid(c) for c in codes]
+    rows_by_code: Dict[str, Dict[str, Any]] = {}
+    pending = list(secids)
+    for batch in _iter_chunks(pending, 80):
+        payload = em_get_direct(
+            FUND_FLOW_BATCH_HOST,
+            "/api/qt/ulist.np/get",
+            {
+                "fields": "f12,f14,f2,f3,f62",
+                "secids": ",".join(batch),
+                "fltt": "2",
+                "invt": "2",
+                "np": "1",
+            },
+            timeout=20,
+            retries=3,
+        )
+        if not payload:
+            continue
+        for row in diff_list(payload.get("data") or {}):
+            code = str(row.get("f12") or "").zfill(5)
+            if not code:
+                continue
+            pct_raw = to_float(row.get("f3"))
+            rows_by_code[code] = {
+                "code": code,
+                "name": row.get("f14"),
+                "pct": pct_raw / 100 if pct_raw is not None else None,
+                "main_net_in": to_float(row.get("f62")),
+            }
+    rows = [rows_by_code[c] for c in codes if c in rows_by_code]
+    if not rows:
+        return [], "东方财富延迟行情主机 116.xxxxx 批量接口暂不可用"
+    return rows, f"东方财富延迟行情主机 116.xxxxx 批量资金流（覆盖 {len(rows)}/{len(codes)}）"
+
+
+def load_or_fetch_hk_stock_fundflow(data_date: str, scope: str = "full") -> Tuple[List[Dict[str, Any]], str]:
+    filename = f"stock_fundflow_hk_today_full_{data_date}.json"
+    cached = load_build_json(filename)
+    if cached is not None:
+        return list(cached.get("rows") or []), cached.get("source", "build/full")
+    # 注意：东方财富 clist 接口 pz 服务端硬卡 100/页，无法靠调大 pz 扩量；
+    # 故采用「双路合并」：clist 全市场排行（看大单异动）+ ulist 按代码批量（保证 40 只代表股全覆盖）。
+    rows_by_code: Dict[str, Dict[str, Any]] = {}
+    sources: List[str] = []
+    rank_rows, rank_src = _fetch_hk_stock_fundflow_rank_em()
+    if rank_rows:
+        for r in rank_rows:
+            rows_by_code[r["code"]] = r  # clist 优先
+        sources.append(rank_src)
+    batch_rows, batch_src = _fetch_hk_stock_fundflow_payload()
+    if batch_rows:
+        for r in batch_rows:
+            rows_by_code.setdefault(r["code"], r)  # ulist 补全 clist 未覆盖的代表股
+        sources.append(batch_src)
+    rows = list(rows_by_code.values())
+    if not rows:
+        return [], "东方财富港股个股资金流接口暂不可用"
+    source = "；".join(sources) if sources else "东方财富港股个股资金流"
+    save_build_json(filename, {"data_date": data_date, "scope": scope, "source": source, "rows": rows})
+    return rows, source
+
+
+def _fetch_southbound_payload(hk_total_turnover: Optional[float] = None) -> Dict[str, Any]:
+    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    params = {
+        "reportName": "RPT_MUTUAL_DEAL_HISTORY",
+        "columns": "ALL",
+        "pageSize": "30",
+        "sortColumns": "TRADE_DATE,MUTUAL_TYPE",
+        "sortTypes": "-1,1",
+        "source": "WEB",
+        "client": "WEB",
+    }
+    text = http_get(f"{url}?{urllib.parse.urlencode(params)}", DC_HEADERS, timeout=15, retries=3)
+    result = {
+        "trade_date": None,
+        "sh_connect_turnover": None,
+        "sz_connect_turnover": None,
+        "total_turnover": None,
+        "net_buy": None,
+        "turnover_ratio": None,
+        "available": False,
+        "source": SOURCE_DC_HK,
+        "note": "南向（港股通）净买入公开披露，与北向不同；港股通(沪)/(深)为分渠道披露值，合计以「南向合计」为准。",
+    }
+    if not text:
+        result["source"] = "东方财富数据中心 RPT_MUTUAL_DEAL_HISTORY 接口暂不可用"
+        return result
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return result
+    rows = (payload.get("result") or {}).get("data") or []
+    days = sorted({str(r.get("TRADE_DATE", ""))[:10] for r in rows}, reverse=True)
+    if not days:
+        return result
+    day = days[0]
+    by_type: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        if str(r.get("TRADE_DATE", ""))[:10] == day:
+            by_type[str(r.get("MUTUAL_TYPE"))] = r
+
+    def amt(mutual_type: str) -> Optional[float]:
+        value = by_type.get(mutual_type, {}).get("DEAL_AMT")
+        return value * 1e6 if value is not None else None  # DEAL_AMT 单位为百万元
+
+    sh_turnover = amt("003")
+    sz_turnover = amt("004")
+    total_turnover = amt("006")
+    net_raw = by_type.get("006", {}).get("NET_DEAL_AMT")
+    net_buy = net_raw * 1e6 if net_raw is not None else None
+
+    result["trade_date"] = day
+    result["sh_connect_turnover"] = sh_turnover
+    result["sz_connect_turnover"] = sz_turnover
+    result["total_turnover"] = total_turnover
+    result["net_buy"] = net_buy
+    if total_turnover and hk_total_turnover:
+        result["turnover_ratio"] = total_turnover / hk_total_turnover
+    result["available"] = total_turnover is not None
+    return result
+
+
+def load_or_fetch_southbound(data_date: str, hk_total_turnover: Optional[float] = None) -> Dict[str, Any]:
+    return _load_or_fetch_build(_build_filename("fundflow_hk_southbound", data_date), lambda: _fetch_southbound_payload(hk_total_turnover))
+
+
+def _fetch_hk_full_quote() -> List[Dict[str, Any]]:
+    """翻页拉全港股正股行情（东财 clist，fs=m:128+t:3 即主板+创业板普通股，约 2600 只）。
+
+    走 push2delay.eastmoney.com，沙箱可用；仅取 f12 代码 / f14 名称 / f3 涨跌幅，
+    用于推导全市场涨跌家数（与 AKShare stock_hk_spot_em 等价，但绕开沙箱代理拦截）。
+    单页 pz 服务端硬卡 100，故按代码升序翻页拉全量。
+    """
+    fs = "m:128+t:3"
+    out: List[Dict[str, Any]] = []
+    pn = 1
+    total: Optional[int] = None
+    while True:
+        q = urllib.parse.urlencode(
+            {"pz": "100", "pn": str(pn), "fltt": "2", "invt": "2",
+             "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fid": "f12",
+             "fields": "f12,f14,f3", "fs": fs, "po": "0"}
+        )
+        t = http_get(f"https://push2delay.eastmoney.com/api/qt/clist/get?{q}", EM_HK_HEADERS, timeout=20, retries=2)
+        if not t:
+            break
+        try:
+            d = (json.loads(t) or {}).get("data") or {}
+        except Exception:  # noqa: BLE001
+            break
+        if total is None:
+            total = d.get("total")
+        diff = d.get("diff") or {}
+        if not diff:
+            break
+        for v in diff.values():
+            pct = to_float(v.get("f3"))
+            if pct is None:
+                continue
+            out.append({"code": str(v.get("f12") or ""), "name": v.get("f14"), "pct": pct})
+        if total is not None and len(out) >= total:
+            break
+        pn += 1
+        if pn > 60:  # 安全阀：最多 60 页（6000 只）
+            break
+    return out
+
+
+def fetch_hk_market_breadth(data_date: str, stock_rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """抓取港股全市场个股涨跌家数 + 总成交额（AKShare 港股源）。
+
+    口径：收盘快照；港股无涨跌停板，故 limit_up/limit_down 恒为 None。
+    单源失败不影响整体，缺失字段置 None，由渲染层显示「—」。
+
+    兜底：AKShare 港股行情（stock_hk_spot_em，底层 82.push2.eastmoney.com）在沙箱/
+    受限网络常被代理拦截，此时改用已抓取的全市场个股资金流快照（走 push2delay，
+    沙箱可用）按涨跌幅 pct 推导涨跌家数。总成交额字段 AKShare 独家提供，兜底不补。
+    """
+    ak = get_akshare()
+    warnings: List[str] = []
+    out: Dict[str, Any] = {
+        "available": False,
+        "advance": None,
+        "decline": None,
+        "flat": None,
+        "limit_up": None,
+        "limit_down": None,
+        "total_turnover": None,
+        "source": "",
+        "warnings": warnings,
+    }
+    yyyymmdd = str(data_date).replace("-", "")
+    try:
+        df = call_akshare_with_retry("港股全市场行情", ak.stock_hk_spot_em)
+        if df is not None and len(df) > 0:
+            pct = df["涨跌幅"].astype(float, errors="coerce")
+            out["advance"] = int((pct > 0).sum())
+            out["decline"] = int((pct < 0).sum())
+            out["flat"] = int(((pct == 0) & df["成交量"].notna()).sum())
+            if "成交额" in df.columns:
+                out["total_turnover"] = float(df["成交额"].astype(float, errors="coerce").sum())
+            out["source"] = SOURCE_AK_HK
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"港股全市场行情获取失败: {e}")
+
+    # 兜底：AKShare 港股行情（stock_hk_spot_em，底层 82.push2）在沙箱/受限网络被代理拦截时，
+    # 优先用全市场正股行情快照（翻页拉 t:3 全量，约 2600 只，走 push2delay）推涨跌家数；
+    # 若全量也失败，退回已抓的个股资金流快照子集（样本内，约 213 只）。
+    if out["advance"] is None:
+        full = _fetch_hk_full_quote()
+        if full:
+            adv = dec = fl = 0
+            for r in full:
+                pct = to_float(r.get("pct"))
+                if pct is None:
+                    continue
+                if pct > 0:
+                    adv += 1
+                elif pct < 0:
+                    dec += 1
+                else:
+                    fl += 1
+            if adv or dec or fl:
+                out["advance"] = adv
+                out["decline"] = dec
+                out["flat"] = fl
+                out["source"] = out["source"] or "东方财富全市场港股行情(涨跌幅推导)"
+                warnings.append("港股全市场涨跌家数：stock_hk_spot_em 不可用，已用全市场港股正股行情快照涨跌幅推导（全量约 2600 只）。")
+        elif stock_rows:
+            adv = dec = fl = 0
+            for r in stock_rows:
+                pct = to_float(r.get("pct"))
+                if pct is None:
+                    continue
+                if pct > 0:
+                    adv += 1
+                elif pct < 0:
+                    dec += 1
+                else:
+                    fl += 1
+            if adv or dec or fl:
+                out["advance"] = adv
+                out["decline"] = dec
+                out["flat"] = fl
+                out["sample_based"] = True
+                out["source"] = out["source"] or "东方财富港股个股资金流(样本内涨跌幅推导)"
+                warnings.append("港股全市场涨跌家数：stock_hk_spot_em 与全量行情均不可用，已用个股资金流快照涨跌幅推导（样本内约 200+ 只覆盖）。")
+
+    out["available"] = any(v is not None for v in (out["advance"], out["total_turnover"]))
     return out
 

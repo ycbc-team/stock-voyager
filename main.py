@@ -53,6 +53,12 @@ def build_site_index(fundflow_result: Dict | None = None, stocktrend_result: Dic
             "description": "看市场强弱、行业热力图、主力净流入、北向成交占比，适合先把握当天全市场主线。",
         },
         {
+            "title": "港股资金流日报",
+            "href": "fundflow_hk.html",
+            "badge": "港股资金",
+            "description": "看恒指/恒科强弱、港股行业主力净流入、南向（港股通）成交额与净买入、个股资金流 TOP。",
+        },
+        {
             "title": "A股个股走势",
             "href": "stocktrend_ashare.html",
             "badge": "A股清单",
@@ -98,6 +104,7 @@ def main() -> Dict:
 
     if args.only in ("all", "fundflow"):
         fundflow_result = build_fundflow_report(data_date=args.date, out_dir=args.out, topn=args.topn, verbose=True)
+        build_fundflow_report(data_date=args.date, out_dir=args.out, topn=args.topn, verbose=True, market="hk")
 
     if args.only in ("all", "stocktrend"):
         stocktrend_result = build_stocktrend_report(data_date=args.date, out_dir=args.out, market=args.stocktrend_market)
