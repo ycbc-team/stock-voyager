@@ -17,8 +17,8 @@ if ROOT_DIR not in sys.path:
 from common.storage import default_data_dir
 from common.storage import default_site_dir
 from common.storage import read_json
-from fundflow.fundflow_data_fetcher import collect_report_data
-from fundflow.fundflow_data_fetcher import write_report_json
+from fundflow.fundflow_processor import collect_report_data
+from fundflow.fundflow_processor import write_report_json
 from fundflow.fundflow_ui_renderer import write_html
 
 

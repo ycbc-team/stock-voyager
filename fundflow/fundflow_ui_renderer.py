@@ -24,6 +24,7 @@ from common.storage import default_data_dir
 from common.storage import default_site_dir
 from common.site_navigation import render_site_nav
 from common.site_navigation import site_nav_css
+from common.market_data import to_float
 
 
 _WEEK = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -127,84 +128,6 @@ def product_source_text():
     return "公开数据整理"
 
 
-def build_market_views(result):
-    indices = {x["name"]: x for x in result.get("indices", [])}
-    sw = result.get("sw_industry") or []
-    nb = result.get("northbound") or {}
-    style_proxy = result.get("style_proxy") or []
-
-    sh = indices.get("上证指数")
-    sz = indices.get("深证成指")
-    cyb = indices.get("创业板指")
-    up_n = sum(1 for x in sw if (x.get("pct") or 0) > 0)
-    dn_n = sum(1 for x in sw if (x.get("pct") or 0) < 0)
-    breadth_desc = f"行业上涨 {up_n} 个，下跌 {dn_n} 个" if sw else "行业广度数据暂缺"
-    index_desc = "、".join(
-        f"{name}{x['pct']:+.2f}%"
-        for name, x in (("上证", sh), ("深成", sz), ("创业板", cyb))
-        if x and x.get("pct") is not None
-    ) or "核心指数数据暂缺"
-    breadth_rating = "r1" if up_n > dn_n else ("r3" if dn_n > up_n else "r2")
-    breadth_label = "偏强" if up_n > dn_n else ("偏弱" if dn_n > up_n else "均衡")
-
-    net_vals = [x["main_net_in"] for x in sw if x.get("main_net_in") is not None]
-    total_net = sum(net_vals) / 1e8 if net_vals else None
-    top_in = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"], reverse=True)[:2]
-    top_out = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"])[:2]
-    in_desc = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in top_in) or "暂无明显流入主线"
-    out_desc = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in top_out) or "暂无明显流出主线"
-    flow_rating = "r1" if (total_net or 0) > 0 else ("r3" if (total_net or 0) < 0 else "r2")
-    flow_label = "净流入" if (total_net or 0) > 0 else ("净流出" if (total_net or 0) < 0 else "分化")
-    flow_brief = f"申万 31 行业合计 {total_net:+.1f} 亿" if total_net is not None else "行业主力净额暂缺"
-
-    lead_style = None
-    if style_proxy:
-        lead_style = sorted(style_proxy, key=lambda x: x.get("pct") or 0, reverse=True)[0]
-    nb_ratio = nb.get("turnover_ratio")
-    nb_desc = f'北向成交占两市 {nb_ratio * 100:.2f}%' if nb_ratio else "北向占比数据暂缺"
-    style_desc = f'领涨主题：{lead_style["name"]} {lead_style["pct"]:+.2f}%' if lead_style else "主题风格数据暂缺"
-    style_rating = "r1" if lead_style and (lead_style.get("pct") or 0) > 0 else ("r3" if lead_style and (lead_style.get("pct") or 0) < 0 else "r2")
-    style_label = "风格偏多" if lead_style and (lead_style.get("pct") or 0) > 0 else ("风格承压" if lead_style and (lead_style.get("pct") or 0) < 0 else "风格中性")
-
-    cards = [
-        (
-            "v1",
-            "市场概览",
-            breadth_label,
-            breadth_rating,
-            f"<span class=\"k\">{index_desc}</span><br>{breadth_desc}",
-            "聚焦核心指数与行业涨跌家数，适合先看整体强弱。",
-        ),
-        (
-            "v2",
-            "资金主线",
-            flow_label,
-            flow_rating,
-            f"<span class=\"u\">流入：</span>{in_desc}<br><span class=\"d\">流出：</span>{out_desc}",
-            flow_brief,
-        ),
-        (
-            "v3",
-            "风格偏好",
-            style_label,
-            style_rating,
-            f"{style_desc}<br>{nb_desc}",
-            "结合主题代理与北向成交占比，看盘后风格偏向。",
-        ),
-    ]
-
-    html = ['    <div class="views">\n']
-    for cls, title, rating_text, rating_cls, line_html, footer in cards:
-        html.append(
-            f'      <div class="view {cls}">\n'
-            f'        <div class="vh"><div class="vn">{title}</div><span class="rating {rating_cls}">{rating_text}</span></div>\n'
-            f'        <div class="vl">{line_html}</div>\n'
-            f'        <div class="vr">{footer}</div>\n'
-            f'      </div>\n'
-        )
-    html.append("    </div>\n")
-    return "".join(html)
-
 
 def load_result(path):
     with open(path, encoding="utf-8") as f:
@@ -249,7 +172,23 @@ def write_html(path, result):
     for warning in result.get("fetch_warnings") or []:
         S.append(f'  <div class="style-note"><b style="color:var(--amber)">⚠ 数据抓取提示</b> ｜ {warning}</div>\n')
 
-    S.append(_panel("今日解读", "盘后速览", build_market_views(result)))
+    mv = result.get("market_verdict") or {}
+    if mv.get("headline"):
+        tone = mv.get("tone", "flat")
+        tone_word = mv.get("tone_word") or {"up": "整体偏强", "down": "整体偏弱", "flat": "整体震荡"}.get(tone, "—")
+        S.append(
+            '  <div class="panel sec-gap">\n'
+            '    <div class="p-title"><span class="bar"></span>盘面定调\n'
+            '      <span class="vb-meta vb-inline">\n'
+            f'        <span class="vb-tone vb-tone-{tone}">{tone_word}</span>\n'
+            '      </span>\n'
+            '    </div>\n'
+            '    <div class="vb-body">\n'
+            f'      <div class="vb-text">{mv["headline"]}</div>\n'
+            '    </div>\n'
+            '  </div>\n'
+        )
+
 
     idx_rows = []
     for x in result["indices"]:
@@ -257,22 +196,18 @@ def write_html(path, result):
         prev = (x["close"] - x["chg"]) if (x["close"] is not None and x["chg"] is not None) else None
         close_s = f'{x["close"]:,.2f}' if x["close"] is not None else "—"
         prev_s = f"{prev:,.2f}" if prev is not None else "—"
-        chg_s = f'{x["chg"]:+,.2f}' if x["chg"] is not None else "—"
-        amt_s = h_amount(x.get("turnover"))
         idx_rows.append(
             f'      <tr>\n'
-            f'        <td>{x["name"]}<span class="code">{idx_prefix(x["code"])}{x["code"]}</span></td>\n'
+            f'        <td>{x["name"]}<div class="code">{idx_prefix(x["code"])}{x["code"]}</div></td>\n'
             f'        <td style="color:var(--txt);font-weight:700">{close_s}</td>\n'
             f'        <td class="{cls}">{pct_s}</td>\n'
-            f'        <td class="{cls}">{chg_s}</td>\n'
             f'        <td style="color:var(--txt3)">{prev_s}</td>\n'
-            f'        <td style="color:var(--txt2)">{amt_s}</td>\n'
             f'      </tr>'
         )
     if idx_rows:
         body = (
             '    <table class="idx-table">\n      <thead>\n'
-            '        <tr><th>指数</th><th>收盘点位</th><th>涨跌幅</th><th>涨跌点</th><th>昨收</th><th>成交额</th></tr>\n'
+            '        <tr><th>指数</th><th>收盘点位</th><th>涨跌幅</th><th>昨收</th></tr>\n'
             '      </thead>\n      <tbody>\n' + "\n".join(idx_rows) + '\n      </tbody>\n    </table>\n'
         )
     else:
@@ -281,14 +216,15 @@ def write_html(path, result):
 
     idx_by_name = {x["name"]: x for x in result["indices"]}
 
-    def kpi(name, code, val, val_cls, chg, chg_cls, sub, glow=None):
+    def kpi(name, code, val, val_cls, chg, chg_cls, sub, glow=None, chg_extra=None):
         glow_c = f'<div class="glow-{glow}"></div>' if glow else ""
         code_tag = f'<span class="k-code">{code}</span>' if code else ""
+        extra = f' <span class="{chg_extra[1]}">{chg_extra[0]}</span>' if chg_extra else ""
         return (
             f'      <div class="kpi">\n'
             f'        <div class="k-name">{name} {code_tag}</div>\n'
             f'        <div class="k-val {val_cls}">{val}</div>\n'
-            f'        <div class="k-chg {chg_cls}">{chg}</div>\n'
+            f'        <div class="k-chg {chg_cls}">{chg}{extra}</div>\n'
             f'        <div class="k-sub">{sub}</div>\n        {glow_c}</div>'
         )
 
@@ -302,15 +238,19 @@ def write_html(path, result):
         x = idx_by_name.get(nm)
         if x and x["close"] is not None:
             pct_s, cls = h_pct(x["pct"])
-            prev = (x["close"] - x["chg"]) if x["chg"] is not None else None
-            sub = f'{prev:,.2f}→{x["close"]:,.2f}' if prev is not None else "—"
+            sub = x.get("idx_note") or "—"
             kpis.append(kpi(nm, pref, f'{x["close"]:,.2f}', cls, pct_s, cls, sub, glow))
 
     tm = result.get("two_market") or {}
     sh, sz = tm.get("sh"), tm.get("sz")
     if sh is not None or sz is not None:
         tot = (sh or 0) + (sz or 0)
-        kpis.append(kpi("两市成交额", "", h_amount(tot), "cyan", f"沪 {h_amount(sh)} · 深 {h_amount(sz)}", "cyan", "收盘口径", "cy"))
+        prev_total = tm.get("prev_total")
+        chg_extra_tm = None
+        if prev_total:
+            pct_chg = (tot - prev_total) / prev_total * 100
+            chg_extra_tm = (f" · 较前一日 {'+' if pct_chg >= 0 else ''}{pct_chg:.1f}%", "up" if pct_chg >= 0 else "down")
+        kpis.append(kpi("两市成交额", "", h_amount(tot), "cyan", f"沪 {h_amount(sh)} · 深 {h_amount(sz)}", "cyan", "收盘口径", "cy", chg_extra=chg_extra_tm))
     if nb.get("turnover_ratio"):
         kpis.append(kpi("北向成交占比", "", f'{nb["turnover_ratio"] * 100:.1f}%', "cyan", "净买入未披露", "flat", "通道成交额口径", "cy"))
     net_vals = [x["main_net_in"] for x in sw if x.get("main_net_in") is not None]
@@ -318,66 +258,49 @@ def write_html(path, result):
         total_net = sum(net_vals) / 1e8
         cls = "up" if total_net >= 0 else "down"
         kpis.append(kpi("申万主力净流入", "", f"{total_net:+.1f}亿", cls, "31行业汇总", cls, "涨红/跌绿口径", "up" if total_net >= 0 else "dn"))
-    if sw:
+    br = result.get("breadth") or {}
+    if br.get("available"):
+        adv = br.get("advance")
+        dec = br.get("decline")
+        flat = br.get("flat")
+        lu = br.get("limit_up")
+        ld = br.get("limit_down")
+        bcls = "up" if (adv or 0) >= (dec or 0) else "down"
+        val = f"{adv}↑ / {dec}↓" if adv is not None and dec is not None else "—"
+        chg = f"涨停 {lu} · 跌停 {ld}" if (lu is not None and ld is not None) else "涨停/跌停暂缺"
+        total_n = (adv or 0) + (dec or 0) + (flat or 0)
+        sub = f"共 {total_n:,} 只 · 上涨占比 {adv / total_n * 100:.0f}%" if total_n else "—"
+        kpis.append(kpi("个股涨跌家数", "", val, bcls, chg, "flat", sub, "up" if bcls == "up" else "dn"))
+    elif sw:
         up_n = sum(1 for x in sw if (x.get("pct") or 0) > 0)
         dn_n = sum(1 for x in sw if (x.get("pct") or 0) < 0)
         kpis.append(kpi("涨跌行业数", "", f"{up_n}↑ / {dn_n}↓", "up", f"共 {len(sw)} 个行业", "flat", "涨多/跌少", "up"))
 
     kpi_html = '    <div class="kpis">\n' + "\n".join(kpis) + "\n    </div>\n" if kpis else _empty_body("市场 KPI 数据暂缺。")
-    if sw:
-        ins = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"], reverse=True)[:2]
-        outs = sorted([x for x in sw if x.get("main_net_in")], key=lambda z: z["main_net_in"])[:2]
-        in_tx = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in ins) or "—"
-        out_tx = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in outs) or "—"
-        ml = (
-            '    <div class="mainline"><div class="ml-label">\n'
-            '      <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L4.5 13.5H11L9.5 22 19 9.5h-6.5L13 2z" fill="var(--cyan)" opacity=".85"/></svg>\n      今日资金主线\n'
-            f'    </div><div class="ml-item"><span class="dot" style="background:var(--up);box-shadow:0 0 8px var(--up)"></span><b class="up">主力净流入居前</b> {in_tx}</div>'
-            f'<div class="ml-item"><span class="dot" style="background:var(--down);box-shadow:0 0 8px var(--down)"></span><b class="down">主力净流出居前</b> {out_tx}</div></div>\n'
-        )
-    else:
-        ml = (
-            '    <div class="mainline"><div class="ml-label">\n'
-            '      <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L4.5 13.5H11L9.5 22 19 9.5h-6.5L13 2z" fill="var(--cyan)" opacity=".85"/></svg>\n      今日资金主线\n'
-            '    </div><div class="ml-item"><span class="arrow">申万行业数据暂缺，无法构造资金主线。</span></div></div>\n'
-        )
-    S.append(_panel("核心市场总览", "收盘口径", kpi_html + ml))
+    S.append(_panel("核心市场总览", "收盘口径", kpi_html))
 
+    # ── 全市场主力资金分布图（置于行业排名上方，无副标题、无图例文字）──
     if sw:
         in_sum = sum(h_yi(x["main_net_in"]) for x in sw if x.get("main_net_in") and x["main_net_in"] > 0)
         out_sum = sum(h_yi(x["main_net_in"]) for x in sw if x.get("main_net_in") and x["main_net_in"] < 0)
         tot_m = in_sum + abs(out_sum)
         in_p = in_sum / tot_m * 100 if tot_m else 0
         out_p = abs(out_sum) / tot_m * 100 if tot_m else 0
-        in_top = sorted([x for x in sw if x.get("main_net_in") and x["main_net_in"] > 0], key=lambda z: z["main_net_in"], reverse=True)[:6]
-        out_top = sorted([x for x in sw if x.get("main_net_in") and x["main_net_in"] < 0], key=lambda z: z["main_net_in"])[:6]
-        in_nm = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in in_top) or "—"
-        out_nm = "、".join(f'{x["name"]} {h_yi_signed(x["main_net_in"])}亿' for x in out_top) or "—"
-        body = (
+        dist_html = (
             '    <div class="dist">\n    <div class="dist-bar">\n'
             f'      <div class="seg" style="width:{out_p:.1f}%;background:linear-gradient(90deg,rgba(14,203,129,.55),rgba(14,203,129,.9))" title="流出行业合计 {out_sum:.1f}亿">流出 {out_sum:.1f}亿</div>\n'
             f'      <div class="seg" style="width:{in_p:.1f}%;background:linear-gradient(90deg,rgba(246,70,93,.6),rgba(246,70,93,.95))" title="流入行业合计 {in_sum:.1f}亿">流入 {in_sum:.1f}亿</div>\n'
-            f'    </div>\n    <div class="dist-legend"><div class="it"><span class="sw" style="background:rgba(246,70,93,.9)"></span>{in_nm}</div><div class="it"><span class="sw" style="background:rgba(14,203,129,.9)"></span>{out_nm}</div></div></div>\n'
+            f'    </div></div>\n'
         )
     else:
-        body = _empty_body("申万行业数据暂缺，无法汇总主力资金分布。")
-    S.append(_panel("全市场主力资金分布", "按申万31行业汇总", body))
+        dist_html = _empty_body("申万行业数据暂缺，无法汇总主力资金分布。")
 
+    # ── 申万一级行业主力净流入（全行业排名，无副标题、数值不带涨跌幅）──
     if sw:
-        cells = []
-        for x in sorted(sw, key=lambda z: (z.get("pct") or 0), reverse=True):
-            cells.append(
-                f'      <div class="hcell" style="{heat_bg(x["pct"])}">\n'
-                f'        <div class="hn">{x["name"]}</div>\n'
-                f'        <div class="hp">{x["pct"]:+.2f}%</div>\n'
-                f'        <div class="hf">主力 {h_yi_signed(x["main_net_in"])}亿</div>\n'
-                f'      </div>'
-            )
-        heat = '    <div class="heat">\n' + "\n".join(cells) + "\n    </div>\n"
-        top = sorted([x for x in sw if x.get("main_net_in") is not None], key=lambda z: abs(z["main_net_in"]), reverse=True)[:12]
-        maxv = max(abs(x["main_net_in"]) for x in top) if top else 1
+        all_sorted = sorted([x for x in sw if x.get("main_net_in") is not None], key=lambda z: z["main_net_in"], reverse=True)
+        maxv = max(abs(x["main_net_in"]) for x in all_sorted) if all_sorted else 1
         rows = []
-        for x in top:
+        for x in all_sorted:
             v = x["main_net_in"]
             width = (abs(h_yi(v)) / h_yi(maxv) * 46) if maxv else 0
             if v >= 0:
@@ -386,13 +309,12 @@ def write_html(path, result):
                 bar = f'<div class="bar out" style="width:{width:.1f}%"><span class="v">{h_yi(v):.1f}亿</span></div>'
             rows.append(f'      <div class="flow-row"><div class="fn">{x["name"]}</div><div class="fb">{bar}</div><div class="fn"></div></div>')
         flow = (
-            '    <div class="p-title" style="margin-top:14px;margin-bottom:8px"><span class="bar"></span>行业主力净流入 TOP（红=净流入 / 绿=净流出）</div>\n'
             '    <div class="flow-wrap"><div class="flow-axis"></div>\n' + "\n".join(rows) + "\n    </div>\n"
         )
-        body = heat + flow
+        body = dist_html + flow
     else:
-        body = _empty_body("申万行业数据暂缺，无法绘制热力图与资金流条形。")
-    S.append(_panel("申万一级行业热力图", "31 行业 · 涨红跌绿", body))
+        body = _empty_body("申万行业数据暂缺，无法绘制资金流条形。")
+    S.append(_panel("申万一级行业主力净流入", "31 行业 · 涨红跌绿", body))
 
     ti, to = result["stock_top_in"], result["stock_top_out"]
     if ti or to:
@@ -423,41 +345,32 @@ def write_html(path, result):
         body = _empty_body("个股资金流数据暂缺。")
     S.append(_panel("个股资金流排行", "主力净额 · 收盘", body))
 
-    si = result["style_indices"]
-    sp = result["style_proxy"]
-    if si or sp:
-        parts = []
-        if si:
-            rws = []
-            for x in si:
-                pct_s, cls = h_pct(x["pct"])
-                rws.append(f'      <tr><td>{x["name"]}</td><td style="color:var(--txt);font-weight:700">{x["close"]:,.2f}</td><td class="{cls}">{pct_s}</td></tr>')
-            parts.append('    <table class="idx-table">\n      <thead><tr><th>风格指数</th><th>收盘</th><th>涨跌幅</th></tr></thead>\n      <tbody>\n' + "\n".join(rws) + '\n      </tbody>\n    </table>\n')
-        if sp:
-            bars = []
-            for x in sp:
-                pct_s, _ = h_pct(x["pct"])
-                width = min(abs(x["pct"]) / 3 * 50, 50)
-                if x["pct"] >= 0:
-                    bar = f'<div class="sa-fill" style="left:50%;width:{width:.1f}%;background:linear-gradient(90deg,rgba(246,70,93,.4),rgba(246,70,93,.95))"></div>'
-                else:
-                    bar = f'<div class="sa-fill" style="right:50%;width:{width:.1f}%;background:linear-gradient(270deg,rgba(14,203,129,.4),rgba(14,203,129,.95))"></div>'
-                bars.append(f'      <div class="sa-bar"><div class="mid"></div>{bar}<span style="position:absolute;{"left" if x["pct"] >= 0 else "right"}:8px;top:5px;font-family:var(--mono);font-size:10.5px;color:var(--txt2)">{x["name"]} {pct_s}</span></div>')
-            parts.append('    <div class="style-axis"><div class="sa-title"><span>主题代理（申万行业聚合）</span><span>跌 ◀ 　 ▶ 涨</span></div>\n' + "\n".join(bars) + "\n    </div>\n")
-        body = "\n".join(parts)
-    else:
-        body = _empty_body("风格指数数据暂缺。")
-    S.append(_panel("风格与主题", "国证风格 + 主题聚合", body))
 
     if nb.get("available"):
-        t_r = f'{nb["turnover_ratio"] * 100:.2f}%' if nb.get("turnover_ratio") else "—"
+        t_r_val = (to_float(nb.get("turnover_ratio")) * 100) if nb.get("turnover_ratio") is not None else 0.0
+        t_r = f"{t_r_val:.2f}%" if nb.get("turnover_ratio") else "—"
+        # A3 北向成交额环比（读前一日缓存，processor 已算好）
+        pct_chg = nb.get("turnover_pct_chg")
+        chg_html = ""
+        if pct_chg is not None:
+            cls = "up" if pct_chg >= 0 else "down"
+            sign = "+" if pct_chg >= 0 else ""
+            chg_html = f'<div class="n-sub"><span class="n-chg {cls}">较前一日 {sign}{pct_chg:.1f}%</span></div>'
+        # 双通道占比（文字洞察，非图表）
+        sh = to_float(nb.get("sh_connect_turnover")) or 0.0
+        sz = to_float(nb.get("sz_connect_turnover")) or 0.0
+        tot = sh + sz
+        bigger = "沪股通" if sh >= sz else "深股通"
+        sh_r = (sh / tot * 100) if tot else 0.0
+        sz_r = (sz / tot * 100) if tot else 0.0
         body = (
             '    <div class="nkpis">\n'
             f'      <div class="nkpi"><div class="nl">沪股通成交额</div><div class="nv">{h_amount(nb["sh_connect_turnover"])}</div></div>\n'
             f'      <div class="nkpi"><div class="nl">深股通成交额</div><div class="nv">{h_amount(nb["sz_connect_turnover"])}</div></div>\n'
-            f'      <div class="nkpi"><div class="nl">北向合计成交额</div><div class="nv">{h_amount(nb["total_turnover"])}</div></div>\n'
+            f'      <div class="nkpi"><div class="nl">北向合计成交额</div><div class="nv">{h_amount(nb["total_turnover"])}</div>{chg_html}</div>\n'
             f'      <div class="nkpi"><div class="nl">成交占比(占两市)</div><div class="nv">{t_r}</div></div>\n'
             '    </div>\n'
+            f'    <div class="n-flow"><div class="ch"><div class="ct">更活跃通道</div><div class="cv">{bigger} 占优</div></div><div class="ch"><div class="ct">两通道占比</div><div class="cv">沪 {sh_r:.1f}% · 深 {sz_r:.1f}%</div></div></div>\n'
             '    <div class="n-note">⚠ 北向净买入自 2024-08-19 起不再实时披露，本页仅展示公开的【成交额】与【成交占比】，不展示/不编造净买入数字。</div>\n'
         )
     else:
@@ -468,14 +381,27 @@ def write_html(path, result):
     hot = hs.get("hot", [])
     weak = hs.get("weak", [])
     if hot or weak:
-        def hcol(title, items, color):
+        def hcol(title, items, color, kind):
             cards = []
             for x in items:
-                pct_s, _ = h_pct(x["pct"])
-                cards.append(f'      <div class="hot-card"><div class="ic" style="background:rgba(255,255,255,.05);color:var(--{color})">{x["name"][:2]}</div><div><div class="ht">{x["name"]}</div><div class="hd">涨跌幅 {pct_s}</div></div></div>')
+                pct_s, pct_cls = h_pct(x["pct"])
+                net = x.get("main_net_in")
+                net_s = (h_yi_signed(net) + "亿") if net is not None else "—"
+                pool = x.get(kind) or []
+                if pool:
+                    lead_s = "、".join(f'{l["name"]}({(l["pct"] or 0):+.2f}%)' for l in pool)
+                else:
+                    lead_s = "—"
+                lead_label = "领涨" if kind == "zt" else "领跌"
+                cards.append(
+                    f'      <div class="hot-card"><div class="ic" style="background:rgba(255,255,255,.05);color:var(--{color})">{x["name"][:2]}</div>'
+                    f'<div><div class="ht">{x["name"]}</div>'
+                    f'<div class="hd">涨跌幅 <b class="{pct_cls}">{pct_s}</b> · 主力 {net_s}</div>'
+                    f'<div class="hl">{lead_label} {lead_s}</div></div></div>'
+                )
             return f'    <div class="hot-col"><h4>{title} <span class="pill" style="background:rgba(246,70,93,.12);color:var(--up-b)">TOP {len(items)}</span></h4>\n' + "\n".join(cards) + "\n    </div>"
 
-        body = '    <div class="hot">\n' + hcol("今日热点（涨幅前）", hot, "up-b") + hcol("今日异动（跌幅前）", weak, "down-b") + "    </div>\n"
+        body = '    <div class="hot">\n' + hcol("今日热点（涨幅前）", hot, "up-b", "zt") + hcol("今日异动（跌幅前）", weak, "down-b", "dt") + "    </div>\n"
     else:
         body = _empty_body("热点/异动板块数据暂缺。")
     S.append(_panel("热点与异动板块", "申万行业涨跌 TOP", body))

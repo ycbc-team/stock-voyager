@@ -19,11 +19,9 @@ import sys
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
-
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
-
 
 from common.market_data import DC_HEADERS
 from common.market_data import REQUEST_DELAY
@@ -44,7 +42,6 @@ from common.storage import save_build_json
 from common.storage import save_cache_json
 from common.storage import save_data_json
 from common.storage import write_json
-
 
 INDICES = [
     ("上证指数", "1.000001"),
@@ -87,14 +84,12 @@ SOURCE_GT = "腾讯财经 gtimg 接口（回退源）"
 SOURCE_SW = "AKShare 申万一级指数 + 东方财富个股资金流聚合"
 STATIC_CACHE_SCHEMA_VERSION = 1
 
-
 def _pick_amount(row: Dict[str, Any], *fields: str) -> Optional[float]:
     for field in fields:
         value = to_float(row.get(field))
         if value is not None and 1e11 <= abs(value) <= 1e13:
             return value
     return None
-
 
 def _load_or_fetch_static_cache(filename: str, loader, *, source: str, refresh_policy: str):
     cached = load_cache_json(filename)
@@ -113,10 +108,8 @@ def _load_or_fetch_static_cache(filename: str, loader, *, source: str, refresh_p
     )
     return payload, "fresh"
 
-
 def _build_filename(stem: str, data_date: str) -> str:
     return f"{stem}_{data_date}.json"
-
 
 def _load_or_fetch_build(filename: str, loader):
     cached = load_build_json(filename)
@@ -126,12 +119,43 @@ def _load_or_fetch_build(filename: str, loader):
     save_build_json(filename, payload)
     return payload
 
+def _compute_index_note(df, data_date) -> Optional[str]:
+    """指数卡定性副标：均线定位(A) + 区间高低(B)。失败/数据不足返回 None。"""
+    try:
+        if df is None or getattr(df, "empty", True):
+            return None
+        d = df.copy()
+        d["日期"] = d["日期"].astype(str)
+        if data_date:
+            d = d[d["日期"] <= str(data_date)]
+        if d.empty or "收盘" not in d.columns:
+            return None
+        closes = d["收盘"].astype(float)
+        last = float(closes.iloc[-1])
+        ma_parts = []
+        for n in (5, 10, 20):
+            if len(closes) >= n:
+                ma = float(closes.iloc[-n:].mean())
+                if last > ma:
+                    ma_parts.append(n)
+        ma_txt = f"站上{'/'.join(str(p) for p in ma_parts)}日线" if ma_parts else "跌破均线"
+        win = closes.iloc[-20:] if len(closes) >= 20 else closes
+        range_txt = ""
+        if len(win) >= 2:
+            if last >= float(win.max()):
+                range_txt = "创近20日新高"
+            elif last <= float(win.min()):
+                range_txt = "近20日新低"
+        return ma_txt + (f" · {range_txt}" if range_txt else "")
+    except Exception:
+        return None
 
-def _fetch_market_snapshot_payload() -> Dict[str, Any]:
+def _fetch_market_snapshot_payload(data_date: Optional[str] = None) -> Dict[str, Any]:
     indices: List[Dict[str, Any]] = []
     style_indices: List[Dict[str, Any]] = []
     sh_amount = None
     sz_amount = None
+    prev_total: Optional[float] = None
     source = SOURCE_EM
 
     secids = ",".join(secid for _, secid in INDICES) + "," + ",".join(secid for _, secid in STYLE_INDEX)
@@ -179,6 +203,37 @@ def _fetch_market_snapshot_payload() -> Dict[str, Any]:
         if rows.get("399001"):
             sz_amount = _pick_amount(rows["399001"], "f6", "f7", "f8", "f67")
 
+    # 指数日K：成交额环比(prev_total) + 指数卡定性副标(均线定位+区间高低)
+    index_daily: Dict[str, Any] = {}
+    if data_date:
+        try:
+            ak = get_akshare()
+            for _nm, _sym in (
+                ("上证指数", "sh000001"),
+                ("深证成指", "sz399001"),
+                ("创业板指", "sz399006"),
+                ("科创50", "sh000688"),
+            ):
+                try:
+                    index_daily[_nm] = call_akshare_with_retry(f"{_nm}日K", ak.stock_zh_index_daily_em, symbol=_sym)
+                except Exception:
+                    index_daily[_nm] = None
+        except Exception:
+            index_daily = {}
+        sh_df = index_daily.get("上证指数")
+        sz_df = index_daily.get("深证成指")
+        if (
+            sh_df is not None and sz_df is not None
+            and not sh_df.empty and not sz_df.empty
+            and "成交额" in sh_df.columns and "成交额" in sz_df.columns
+        ):
+            sh_df = sh_df.tail(60)
+            sz_df = sz_df.tail(60)
+            sh_mask = sh_df["日期"].astype(str) < data_date
+            sz_mask = sz_df["日期"].astype(str) < data_date
+            if sh_mask.any() and sz_mask.any():
+                prev_total = float(sh_df.loc[sh_mask].iloc[-1]["成交额"]) + float(sz_df.loc[sz_mask].iloc[-1]["成交额"])
+
     if not indices:
         source = SOURCE_GT
         want = {secid.split(".")[1]: name for name, secid in INDICES}
@@ -214,17 +269,20 @@ def _fetch_market_snapshot_payload() -> Dict[str, Any]:
                     }
                 )
 
+    # 指数卡定性副标：均线定位(A)+区间高低(B)，缺失时渲染层显示『—』
+    for _x in indices:
+        _df = index_daily.get(_x.get("name"))
+        _x["idx_note"] = _compute_index_note(_df, data_date) if _df is not None else None
+
     return {
         "indices": indices,
         "style_indices": style_indices,
-        "two_market": {"sh": sh_amount, "sz": sz_amount},
+        "two_market": {"sh": sh_amount, "sz": sz_amount, "prev_total": prev_total},
         "source": source,
     }
 
-
 def load_or_fetch_market_snapshot(data_date: str) -> Dict[str, Any]:
-    return _load_or_fetch_build(_build_filename("fundflow_market_snapshot", data_date), _fetch_market_snapshot_payload)
-
+    return _load_or_fetch_build(_build_filename("fundflow_market_snapshot", data_date), lambda: _fetch_market_snapshot_payload(data_date))
 
 def _fetch_sw_mapping_payload() -> Dict[str, Any]:
     by_code = {code: {"code": code, "name": name} for code, name in SW_INDUSTRY.items()}
@@ -233,7 +291,6 @@ def _fetch_sw_mapping_payload() -> Dict[str, Any]:
         "mutable": False,
         "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
-
 
 def fetch_sw_mapping() -> Tuple[Dict[str, Any], str]:
     payload, source = _load_or_fetch_static_cache(
@@ -244,7 +301,6 @@ def fetch_sw_mapping() -> Tuple[Dict[str, Any], str]:
     )
     source_text = "common/cache" if source == "common/cache" else "内置申万一级常量"
     return payload, source_text
-
 
 def _fetch_sw_stock_map_payload() -> Dict[str, Any]:
     ak = get_akshare()
@@ -272,7 +328,6 @@ def _fetch_sw_stock_map_payload() -> Dict[str, Any]:
         "mutable": True,
         "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
-
 
 def fetch_sw_stock_map(required_codes: Optional[List[str]] = None) -> Tuple[Dict[str, str], str]:
     cached = load_cache_json("sw_stock_map.json")
@@ -341,7 +396,6 @@ def fetch_sw_stock_map(required_codes: Optional[List[str]] = None) -> Tuple[Dict
         source += f"（检测到 {len(missing_codes)} 只未映射股票，已自动刷新）"
     return refreshed_map, source
 
-
 def _fetch_sw_index_spot_payload() -> Dict[str, Any]:
     ak = get_akshare()
     rows: List[Dict[str, Any]] = []
@@ -362,36 +416,8 @@ def _fetch_sw_index_spot_payload() -> Dict[str, Any]:
         rows.append({"code": code, "name": SW_INDUSTRY[code], "close": close, "pct": pct, "source": source})
     return {"rows": rows, "source": source if rows else "AKShare 申万一级指数接口暂不可用"}
 
-
 def load_or_fetch_sw_index_spot(data_date: str) -> Dict[str, Any]:
     return _load_or_fetch_build(_build_filename("fundflow_sw_index_spot", data_date), _fetch_sw_index_spot_payload)
-
-
-def build_sw_industry(sw_spot: List[Dict[str, Any]], stock_rows: List[Dict[str, Any]], sw_mapping: Dict[str, Any], stock_to_industry: Dict[str, str]) -> List[Dict[str, Any]]:
-    sw_map = (sw_mapping or {}).get("by_code") or {code: {"code": code, "name": name} for code, name in SW_INDUSTRY.items()}
-    sums: Dict[str, float] = {}
-    for row in stock_rows:
-        code = row["code"]
-        industry_code = stock_to_industry.get(code)
-        if industry_code not in sw_map:
-            continue
-        sums[industry_code] = sums.get(industry_code, 0.0) + (to_float(row.get("main_net_in")) or 0.0)
-    out = []
-    for row in sw_spot:
-        code = row["code"]
-        meta = sw_map.get(code) or {"code": code, "name": row["name"]}
-        out.append(
-            {
-                "code": code,
-                "name": meta["name"],
-                "close": row.get("close"),
-                "pct": row.get("pct"),
-                "main_net_in": sums.get(code),
-                "source": SOURCE_SW,
-            }
-        )
-    return out
-
 
 def _fetch_northbound_dc() -> Optional[Dict[str, Any]]:
     url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
@@ -441,7 +467,6 @@ def _fetch_northbound_dc() -> Optional[Dict[str, Any]]:
         "source": "东方财富数据中心 RPT_MUTUAL_DEAL_HISTORY（kamt 不可用时的兜底）",
     }
 
-
 def _fetch_northbound_payload(sh_amount: Optional[float], sz_amount: Optional[float]) -> Dict[str, Any]:
     result = {
         "trade_date": None,
@@ -490,7 +515,6 @@ def _fetch_northbound_payload(sh_amount: Optional[float], sz_amount: Optional[fl
     result["source"] = "东方财富 kamt/数据中心接口均不可用（被限流或未披露；不编造净买入）"
     return result
 
-
 def _with_northbound_turnover_ratio(payload: Dict[str, Any], sh_amount: Optional[float], sz_amount: Optional[float]) -> Dict[str, Any]:
     result = dict(payload or {})
     total_turnover = to_float(result.get("total_turnover"))
@@ -500,170 +524,80 @@ def _with_northbound_turnover_ratio(payload: Dict[str, Any], sh_amount: Optional
         result["turnover_ratio"] = total_turnover / two_market_amount
     return result
 
-
 def load_or_fetch_northbound(data_date: str, sh_amount: Optional[float], sz_amount: Optional[float]) -> Dict[str, Any]:
     payload = _load_or_fetch_build(_build_filename("fundflow_northbound", data_date), lambda: _fetch_northbound_payload(sh_amount, sz_amount))
     return _with_northbound_turnover_ratio(payload, sh_amount, sz_amount)
 
+def _pool_to_list(df) -> List[Dict[str, Any]]:
+    """将涨停/跌停池 DataFrame 转换为 [{code, name, pct}] 列表（列名兼容中/英写法）。"""
+    if df is None or len(df) == 0:
+        return []
+    cols = list(df.columns)
+    out: List[Dict[str, Any]] = []
 
-def compute_style_proxy(sw_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    by_code = {row["code"]: row for row in sw_list}
-    out = []
-    for name, codes in STYLE_PROXY.items():
-        pcts = [to_float(by_code[code]["pct"]) for code in codes if code in by_code and to_float(by_code[code]["pct"]) is not None]
-        if pcts:
-            out.append({"name": name, "pct": sum(pcts) / len(pcts), "members": [by_code[code]["name"] for code in codes if code in by_code]})
-    return out
+    def pick(row, *names):
+        for n in names:
+            if n in cols:
+                return row.get(n)
+        return None
 
-
-def fetch_stock_fundflow_top(topn: int, stock_rows: List[Dict[str, Any]], stock_source: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], str]:
-    rows_in = [row for row in stock_rows if row.get("main_net_in") is not None]
-    rows_in.sort(key=lambda row: row["main_net_in"], reverse=True)
-    top_in = rows_in[:topn]
-    rows_out = [row for row in stock_rows if row.get("main_net_in") is not None]
-    rows_out.sort(key=lambda row: row["main_net_in"])
-    top_out = rows_out[:topn]
-    return top_in, top_out, (stock_source if (top_in or top_out) else "东方财富个股资金流排行接口暂不可用")
-
-
-def compute_hotspots(sw_list: List[Dict[str, Any]], topn: int = 5) -> Dict[str, List[Dict[str, Any]]]:
-    valid = [row for row in sw_list if to_float(row["pct"]) is not None]
-    valid.sort(key=lambda row: row["pct"], reverse=True)
-    return {"hot": valid[:topn], "weak": valid[-topn:][::-1]}
-
-
-def _dedupe_texts(items: List[str]) -> List[str]:
-    out: List[str] = []
-    seen = set()
-    for item in items:
-        text = str(item or "").strip()
-        if not text or text in seen:
+    for _, row in df.iterrows():
+        code = pick(row, "代码", "code")
+        name = pick(row, "名称", "name")
+        pct = to_float(pick(row, "涨跌幅", "pct"))
+        if code is None:
             continue
-        seen.add(text)
-        out.append(text)
+        out.append({"code": str(code), "name": str(name) if name is not None else "", "pct": pct})
     return out
 
+def fetch_market_breadth(data_date: str) -> Dict[str, Any]:
+    """抓取全市场个股涨跌家数 + 涨停/跌停数量（AKShare 东方财富源）。
 
-def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose: bool = True) -> Dict[str, Any]:
-    reset_request_count()
-    resolved_date = data_date or detect_trade_date("ashare")
-    fetch_warnings: List[str] = []
-    if verbose:
-        print(f"[*] 数据日期: {resolved_date}")
-
-    market_snapshot = load_or_fetch_market_snapshot(resolved_date)
-    indices = market_snapshot.get("indices") or []
-    style_indices = market_snapshot.get("style_indices") or []
-    idx_source = market_snapshot.get("source") or SOURCE_EM
-    sh_amount = (market_snapshot.get("two_market") or {}).get("sh")
-    sz_amount = (market_snapshot.get("two_market") or {}).get("sz")
-    if verbose:
-        print(f"[+] 指数 {len(indices)} 条 + 风格 {len(style_indices)} 条（{idx_source}）")
-
-    sw_mapping, sw_mapping_source = fetch_sw_mapping()
-    if verbose:
-        print(f"[+] 申万一级映射: {len((sw_mapping or {}).get('by_code', {}))}/31 条（{sw_mapping_source}）")
-
-    sw_index_spot_payload = load_or_fetch_sw_index_spot(resolved_date)
-    sw_spot = sw_index_spot_payload.get("rows") or []
-    sw_spot_source = sw_index_spot_payload.get("source") or "申万一级指数接口暂不可用"
-    if verbose:
-        print(f"[+] 申万一级指数: {len(sw_spot)}/31 条（{sw_spot_source}）")
-
-    stock_rows, stock_rows_source, stock_rows_artifact = load_or_fetch_stock_fundflow_build(
-        resolved_date,
-        scope="full",
-    )
-    if verbose:
-        print(f"[+] 个股资金流全市场: {len(stock_rows)} 条（{stock_rows_source}）")
-
-    stock_codes_today = [str(row.get("code") or "").zfill(6) for row in stock_rows if row.get("code")]
-    stock_to_industry, stock_map_source = fetch_sw_stock_map(required_codes=stock_codes_today)
-    if verbose:
-        print(f"[+] 申万成分股映射: {len(stock_to_industry)} 条股票映射（{stock_map_source}）")
-    missing_industry_codes = sorted(code for code in stock_codes_today if code not in stock_to_industry)
-    if missing_industry_codes:
-        fetch_warnings.append(f"仍有 {len(missing_industry_codes)} 只股票未匹配到申万行业，行业聚合时已跳过。")
-
-    sw_list = build_sw_industry(sw_spot, stock_rows, sw_mapping, stock_to_industry)
-    sw_source = f"{sw_spot_source} + {stock_rows_source}"
-    if verbose:
-        print(f"[+] 申万一级行业聚合: {len(sw_list)}/31 条（{sw_source}）")
-    if not sw_spot:
-        fetch_warnings.append(f"申万一级指数数据异常：{sw_spot_source}")
-
-    northbound = load_or_fetch_northbound(resolved_date, sh_amount, sz_amount)
-    if verbose:
-        print(f"[+] 北向资金: {'可用' if northbound['available'] else '暂不可用'}（{northbound['source']}）")
-    if not northbound["available"]:
-        fetch_warnings.append(f"北向资金数据异常：{northbound['source']}")
-
-    style_proxy = compute_style_proxy(sw_list)
-    if verbose:
-        print(f"[+] 风格代理: {len(style_proxy)} 条主题（金融防御/医药景气/科技成长/周期资源）")
-
-    top_in, top_out, stock_source = fetch_stock_fundflow_top(topn, stock_rows=stock_rows, stock_source=stock_rows_source)
-    hotspots = compute_hotspots(sw_list)
-
-    overall_source = SOURCE_SW if (sw_list or northbound["available"] or top_in) else "腾讯gtimg(指数回退)+AKShare/东方财富(受限)"
-    return {
-        "data_date": resolved_date,
-        "source": overall_source,
-        "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "note_northbound": "北向净买入自2024-08-19起不再披露，仅取成交额与成交占比，不编造净买入。",
-        "indices": indices,
-        "sw_industry": sw_list,
-        "sw_industry_source": sw_source,
-        "northbound": northbound,
-        "two_market": {"sh": sh_amount, "sz": sz_amount},
-        "style_indices": style_indices,
-        "style_indices_source": idx_source,
-        "style_proxy": style_proxy,
-        "stock_top_in": top_in,
-        "stock_top_out": top_out,
-        "stock_source": stock_source,
-        "hotspots": hotspots,
-        "request_count": get_request_count(),
-        "fetch_warnings": _dedupe_texts(fetch_warnings),
-        "artifacts": {
-            "market_snapshot": _build_filename("fundflow_market_snapshot", resolved_date),
-            "sw_index_spot": _build_filename("fundflow_sw_index_spot", resolved_date),
-            "stock_fundflow": stock_rows_artifact,
-            "northbound": _build_filename("fundflow_northbound", resolved_date),
-        },
+    口径：收盘快照；剔除北交所（代码 8 开头 / 920 开头）以对齐沪深A股广度惯例。
+    单源失败不影响整体，缺失字段置 None，由渲染层显示「—」。
+    """
+    ak = get_akshare()
+    warnings: List[str] = []
+    out: Dict[str, Any] = {
+        "available": False,
+        "advance": None,
+        "decline": None,
+        "flat": None,
+        "limit_up": None,
+        "limit_down": None,
+        "zt_list": [],
+        "dt_list": [],
+        "source": "",
+        "warnings": warnings,
     }
+    yyyymmdd = str(data_date).replace("-", "")
 
+    # 1) 涨停 / 跌停 池（东方财富，仅近 30 交易日）
+    try:
+        zt = call_akshare_with_retry("涨停池", ak.stock_zt_pool_em, date=yyyymmdd)
+        dt = call_akshare_with_retry("跌停池", ak.stock_zt_pool_dtgc_em, date=yyyymmdd)
+        out["limit_up"] = int(len(zt)) if zt is not None else None
+        out["limit_down"] = int(len(dt)) if dt is not None else None
+        out["zt_list"] = _pool_to_list(zt)
+        out["dt_list"] = _pool_to_list(dt)
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"涨停/跌停池获取失败: {e}")
 
-def write_report_json(result: Dict[str, Any], out_dir: Optional[str] = None) -> str:
-    if out_dir:
-        path = os.path.join(out_dir, "fundflow.json")
-        payload = {
-            "_meta": {
-                "cache_scope": "page_data",
-                "source": result.get("source"),
-                "data_date": result.get("data_date"),
-                "saved_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            },
-            "data": result,
-        }
-        write_json(path, payload)
-        return path
-    return save_data_json("fundflow.json", result, source=result.get("source"), tags={"data_date": result.get("data_date")})
+    # 2) 全市场个股涨跌家数（东方财富 spot）
+    try:
+        spot = call_akshare_with_retry("全市场涨跌家数", ak.stock_zh_a_spot_em)
+        if spot is not None and len(spot) > 0:
+            codes = spot["代码"].astype(str)
+            keep = ~codes.str.startswith(("8", "920"))  # 剔除北交所
+            df = spot[keep]
+            pct = df["涨跌幅"].astype(float, errors="coerce")
+            out["advance"] = int((pct > 0).sum())
+            out["decline"] = int((pct < 0).sum())
+            out["flat"] = int(((pct == 0) & df["成交量"].notna()).sum())
+            out["source"] = "东方财富个股行情"
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"全市场涨跌家数获取失败: {e}")
 
+    out["available"] = any(v is not None for v in (out["advance"], out["limit_up"]))
+    return out
 
-def main() -> Dict[str, Any]:
-    parser = argparse.ArgumentParser(description="A股收盘数据生产脚本：按请求拆分 JSON 产物，并汇总生成 build/data/fundflow.json")
-    parser.add_argument("--date", help="数据日期 YYYY-MM-DD（默认取最近交易日）")
-    parser.add_argument("--out", help="页面 JSON 输出目录（默认 <项目根>/build/data）")
-    parser.add_argument("--topn", type=int, default=10, help="个股资金流 TOP 数量")
-    args = parser.parse_args()
-
-    result = collect_report_data(data_date=args.date, topn=args.topn, verbose=True)
-    path = write_report_json(result, out_dir=args.out)
-    print(f"\n[✓] 数据产物已写出：\n    {path}")
-    print(f"[i] 本次共发起 {get_request_count()} 次外部请求（含 HTTP 与 AKShare 重试；请求间隔 {REQUEST_DELAY}s）")
-    return result
-
-
-if __name__ == "__main__":
-    main()

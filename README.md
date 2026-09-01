@@ -109,10 +109,17 @@
 
 ## 自动部署（GitHub Actions + Pages）
 
-`.github/workflows/ashare-report.yml` 会在**每个交易日 16:01（北京时间）收盘后**自动运行脚本并把 HTML 部署到 GitHub Pages：
+站点由两条独立工作流按**不同频率**部署，避免两个走势 tab 被每天重算：
 
-- 触发：`push`（推 main 即跑）+ `schedule`（周一至五 08:01 UTC）+ `workflow_dispatch`（可手动触发）
-- 流程：`python3 main.py`（统一产出首页 + `fundflow` + `stocktrend` JSON / HTML）→ 直接上传 `build/site/` → `deploy-pages`
+| 工作流 | 频率 | 重新生成的页面 | 说明 |
+|--------|------|----------------|------|
+| `.github/workflows/fundflow-daily.yml` | 每个交易日 16:01（北京时间，周一至五） | `fundflow.html` + `index.html` | 资金流日报保持每日更新；两个走势 tab 从已部署站点拉回旧版本，随资金流一起发布，保证站点完整 |
+| `.github/workflows/stocktrend-weekly.yml` | 每周五 17:01（北京时间）一次 | `stocktrend_ashare.html` + `stocktrend_hk.html` | 两个走势 tab 每周五只刷新一次；资金流日报与首页从已部署站点拉回每日版本，随走势页一起发布 |
+
+- 触发：`push`（仅 `fundflow-daily` 监听推 main）+ `schedule`（见上表 cron）+ `workflow_dispatch`（可手动触发）
+- 流程：`python3 main.py --only fundflow`（或 `--only stocktrend`）→ 拉回另一组已部署页面 → 上传完整 `build/site/` → `deploy-pages`
 - 一次性配置：仓库 **Settings → Pages → Source 选「GitHub Actions」**，之后每次运行自动更新站点
-- 手动触发：仓库 **Actions → 选中该工作流 → Run workflow**
+- 手动触发：仓库 **Actions → 选中对应工作流 → Run workflow**
 - 站点地址：`https://<owner>.github.io/<repo>/`（根路径即导航首页）
+
+> 注：GitHub Actions 的 `schedule` 只在默认分支（main）上运行；本地修改需合并/推送到 main 后才会按新频率生效。
