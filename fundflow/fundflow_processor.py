@@ -41,10 +41,15 @@ from fundflow.fundflow_data_fetcher import _build_filename
 from fundflow.fundflow_data_fetcher import fetch_market_breadth
 from fundflow.fundflow_data_fetcher import fetch_sw_mapping
 from fundflow.fundflow_data_fetcher import fetch_sw_stock_map
+from fundflow.fundflow_data_fetcher import fetch_hk_market_breadth
+from fundflow.fundflow_data_fetcher import load_or_fetch_hk_index_snapshot
+from fundflow.fundflow_data_fetcher import load_or_fetch_hk_stock_fundflow
 from fundflow.fundflow_data_fetcher import load_or_fetch_market_snapshot
 from fundflow.fundflow_data_fetcher import load_or_fetch_northbound
+from fundflow.fundflow_data_fetcher import load_or_fetch_southbound
 from fundflow.fundflow_data_fetcher import load_or_fetch_stock_fundflow_build
 from fundflow.fundflow_data_fetcher import load_or_fetch_sw_index_spot
+from stocktrend.stocktrend_static_data import HK_BASE_DATA
 
 
 SOURCE_SW = "AKShare 申万一级指数 + 东方财富个股资金流聚合"
@@ -287,7 +292,7 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
         fetch_warnings.append(f"北向资金数据异常：{northbound['source']}")
     _enrich_northbound_pct_chg(northbound, resolved_date)  # A3: 北向成交额环比（读缓存，零请求）
 
-    breadth = fetch_market_breadth(resolved_date)
+    breadth = fetch_market_breadth(resolved_date, stock_rows=stock_rows)
     if verbose:
         print(f"[+] 个股涨跌家数: {'可用' if breadth['available'] else '暂不可用'}（{breadth['source'] or '—'}）")
     for w in breadth.get("warnings", []):
@@ -333,9 +338,10 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
     return result
 
 
-def write_report_json(result: Dict[str, Any], out_dir: Optional[str] = None) -> str:
+def write_report_json(result: Dict[str, Any], out_dir: Optional[str] = None, market: str = "ashare") -> str:
+    filename = "fundflow_hk.json" if market == "hk" else "fundflow.json"
     if out_dir:
-        path = os.path.join(out_dir, "fundflow.json")
+        path = os.path.join(out_dir, filename)
         payload = {
             "_meta": {
                 "cache_scope": "page_data",
@@ -347,4 +353,216 @@ def write_report_json(result: Dict[str, Any], out_dir: Optional[str] = None) -> 
         }
         write_json(path, payload)
         return path
-    return save_data_json("fundflow.json", result, source=result.get("source"), tags={"data_date": result.get("data_date")})
+    return save_data_json(filename, result, source=result.get("source"), tags={"data_date": result.get("data_date")})
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 港股资金流加工 / 装配（镜像 A 股 collect_report_data，模块一一对应）
+# ════════════════════════════════════════════════════════════════════════════
+# 港股二级行业（l2）展示顺序：按 HK_BASE_DATA 中股票出现顺序去重得到，
+# 自然按恒生一级行业（l1）分组排布，不再收敛为 4 大板块 / 12 个一级行业。
+def _hk_l2_order() -> List[str]:
+    seen: List[str] = []
+    for s in HK_BASE_DATA.get("stocks", []):
+        l2 = s.get("l2") or s.get("l1") or ""
+        if l2 and l2 not in seen:
+            seen.append(l2)
+    return seen
+
+
+SOURCE_HK_SECTOR = "东方财富 116.xxxxx 个股资金流 + 港股静态行业分类聚合"
+
+
+def _hk_code_to_sector() -> Dict[str, Dict[str, str]]:
+    """code(5位) -> {sector, l1, l2} 映射，复用 stocktrend 港股分类。"""
+    mapping: Dict[str, Dict[str, str]] = {}
+    for s in HK_BASE_DATA.get("stocks", []):
+        code = str(s["code"]).zfill(5)
+        mapping[code] = {"sector": s.get("sector", ""), "l1": s.get("l1", ""), "l2": s.get("l2", ""), "zh": s.get("zh", "")}
+    return mapping
+
+
+def build_hk_sector(stock_rows: List[Dict[str, Any]], code_to_sector: Dict[str, Dict[str, str]]) -> List[Dict[str, Any]]:
+    """按港股二级行业（l2）聚合个股主力净流入（镜像 申万一级行业聚合）。
+
+    直接按恒生二级业务类别（约 31 类）分组展示，不再收敛为 4 大板块 / 12 个一级行业。
+    主力净流入 = 行业内个股 f62 求和；涨跌幅 = 行业内个股简单平均（无市值加权源，标注为简单平均）。
+    每个行业行的 zt / dt（top3 领涨 / 领跌个股）由 members 的 pct 推导（港股无涨跌停池，直接取板块内个股涨跌幅排序），
+    供「热点与异动板块」面板展示具体个股。
+    """
+    sums: Dict[str, float] = {}
+    pcts: Dict[str, List[float]] = {}
+    members: Dict[str, List[Dict[str, Any]]] = {}
+    for row in stock_rows:
+        code = str(row.get("code") or "").zfill(5)
+        meta = code_to_sector.get(code)
+        if not meta or not meta.get("l2"):
+            continue
+        sec = meta["l2"]
+        sums[sec] = sums.get(sec, 0.0) + (to_float(row.get("main_net_in")) or 0.0)
+        pct = to_float(row.get("pct"))
+        if pct is not None:
+            pcts.setdefault(sec, []).append(pct)
+        members.setdefault(sec, []).append({"name": row.get("name"), "code": code, "pct": pct, "main_net_in": to_float(row.get("main_net_in"))})
+    out: List[Dict[str, Any]] = []
+    for key in _hk_l2_order():
+        if not members.get(key):
+            continue  # 该二级行业在当前资金流样本中无代表股（如不在 TOP200 排行），跳过以免出现空「—」面板
+        sec_members = members.get(key, [])
+        sec_pcts = pcts.get(key, [])
+        avg_pct = sum(sec_pcts) / len(sec_pcts) if sec_pcts else None
+        # 板块内 top3 领涨 / 领跌个股（按 pct 排序；pct 缺失排末尾），供热点面板展示
+        with_pct = [m for m in sec_members if m.get("pct") is not None]
+        zt = sorted(with_pct, key=lambda m: m["pct"], reverse=True)[:3]
+        dt = sorted(with_pct, key=lambda m: m["pct"])[:3]
+        out.append(
+            {
+                "key": key,
+                "name": key,
+                "pct": avg_pct,  # 行业简单平均涨跌幅
+                "main_net_in": sums.get(key),
+                "members": sec_members,
+                "zt": zt,  # 板块内领涨个股 top3（数据驱动，零编造）
+                "dt": dt,  # 板块内领跌个股 top3
+                "source": SOURCE_HK_SECTOR,
+            }
+        )
+    return out
+
+
+def compute_hk_hotspots(hk_sector: List[Dict[str, Any]], topn: int = 5) -> Dict[str, List[Dict[str, Any]]]:
+    valid = [row for row in hk_sector if to_float(row["pct"]) is not None]
+    valid.sort(key=lambda row: row["pct"], reverse=True)
+    return {"hot": valid[:topn], "weak": valid[-topn:][::-1]}
+
+
+def generate_hk_verdict(report_data: Dict[str, Any]) -> Dict[str, Any]:
+    """根据已抓取的港股收盘数据，规则化生成一句话『盘面定调』（纯数据驱动）。"""
+    indices = report_data.get("indices") or []
+    hk = report_data.get("hk_sector") or []
+    sb = report_data.get("southbound") or {}
+
+    core_names = ("恒生指数", "恒生科技指数", "国企指数")
+    core_pcts = [x["pct"] for x in indices if x.get("name") in core_names and x.get("pct") is not None]
+    avg_pct = (sum(core_pcts) / len(core_pcts)) if core_pcts else None
+
+    hk_sorted = sorted(hk, key=lambda x: (x.get("pct") or 0))
+    lead = hk_sorted[-1] if hk_sorted else None
+    weak = hk_sorted[0] if hk_sorted else None
+
+    hk_net = sorted([x for x in hk if x.get("main_net_in") is not None], key=lambda x: x["main_net_in"], reverse=True)
+    top_net = hk_net[:2] if hk_net else []
+
+    sb_ratio = sb.get("turnover_ratio")
+
+    clauses = []
+    if lead and lead.get("pct") is not None:
+        lt = lead["pct"]
+        verb = "领涨" if lt >= 0 else "相对抗跌"
+        clauses.append(f"{lead['name']}（{lt:+.2f}%）{verb}")
+    if top_net:
+        net_names = "、".join(x["name"] for x in top_net)
+        clauses.append(f"{net_names}主力净流入居前")
+    if weak and weak is not lead and (weak.get("pct") or 0) < 0:
+        clauses.append(f"{weak['name']}（{weak['pct']:+.2f}%）承压")
+
+    part1 = "，".join(clauses)
+
+    if avg_pct is not None:
+        if avg_pct > 0:
+            idx_txt = f"主要指数收涨 {avg_pct:+.2f}%"
+        elif avg_pct < 0:
+            idx_txt = f"主要指数收跌 {avg_pct:+.2f}%"
+        else:
+            idx_txt = "主要指数持平"
+    else:
+        idx_txt = "主要指数数据暂缺"
+
+    if sb_ratio is not None:
+        sb_txt = f"南向成交占比 {sb_ratio * 100:.1f}%"
+    elif sb.get("total_turnover") is not None:
+        sb_txt = "南向成交占比暂缺（缺港股总成交额）"
+    else:
+        sb_txt = "南向数据暂缺"
+
+    if avg_pct is None:
+        tone, tone_word = "flat", "方向不明"
+    elif avg_pct > 0.15:
+        tone, tone_word = "up", "偏强"
+    elif avg_pct < -0.15:
+        tone, tone_word = "down", "偏弱"
+    else:
+        tone, tone_word = "flat", "震荡"
+
+    if part1:
+        headline = f"{part1}；{idx_txt}，{sb_txt}，整体{tone_word}。"
+    elif avg_pct is not None or sb_ratio is not None:
+        headline = f"{idx_txt}，{sb_txt}，整体{tone_word}。"
+    else:
+        headline = "当日数据暂缺，无法生成盘面定调。"
+
+    return {"headline": headline, "tone": tone, "tone_word": tone_word, "avg_pct": avg_pct}
+
+
+def collect_report_data_hk(data_date: Optional[str] = None, topn: int = 10, verbose: bool = True) -> Dict[str, Any]:
+    reset_request_count()
+    resolved_date = data_date or detect_trade_date("hk")
+    fetch_warnings: List[str] = []
+    if verbose:
+        print(f"[*] 港股数据日期: {resolved_date}")
+
+    idx_snapshot = load_or_fetch_hk_index_snapshot(resolved_date)
+    indices = idx_snapshot.get("indices") or []
+    idx_source = idx_snapshot.get("source") or SOURCE_GT_HK
+    if verbose:
+        print(f"[+] 港股指数 {len(indices)} 条（{idx_source}）")
+
+    stock_rows, stock_source = load_or_fetch_hk_stock_fundflow(resolved_date, scope="full")
+    if verbose:
+        print(f"[+] 港股个股资金流: {len(stock_rows)} 条（{stock_source}）")
+
+    code_to_sector = _hk_code_to_sector()
+    hk_sector = build_hk_sector(stock_rows, code_to_sector)
+    if verbose:
+        print(f"[+] 港股行业聚合: {len(hk_sector)} 个二级行业（{SOURCE_HK_SECTOR}）")
+
+    breadth = fetch_hk_market_breadth(resolved_date, stock_rows)
+    if verbose:
+        print(f"[+] 港股涨跌家数: {'可用' if breadth['available'] else '暂不可用'}（{breadth['source'] or '—'}）")
+    for w in breadth.get("warnings", []):
+        fetch_warnings.append(w)
+
+    southbound = load_or_fetch_southbound(resolved_date, breadth.get("total_turnover"))
+    if verbose:
+        print(f"[+] 南向资金: {'可用' if southbound['available'] else '暂不可用'}（{southbound['source']}）")
+    if not southbound["available"]:
+        fetch_warnings.append(f"南向资金数据异常：{southbound['source']}")
+
+    top_in, top_out, stock_top_source = fetch_stock_fundflow_top(topn, stock_rows=stock_rows, stock_source=stock_source)
+    hotspots = compute_hk_hotspots(hk_sector)
+
+    overall_source = SOURCE_HK_SECTOR if (hk_sector or southbound["available"] or top_in) else "腾讯gtimg(指数)+东方财富(受限)"
+    result = {
+        "data_date": resolved_date,
+        "source": overall_source,
+        "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "note_southbound": "南向（港股通）净买入公开披露，与北向不同；本页展示成交额、成交占比与净买入。",
+        "indices": indices,
+        "hk_sector": hk_sector,
+        "hk_sector_source": SOURCE_HK_SECTOR,
+        "southbound": southbound,
+        "breadth": breadth,
+        "stock_top_in": top_in,
+        "stock_top_out": top_out,
+        "stock_source": stock_top_source,
+        "hotspots": hotspots,
+        "request_count": get_request_count(),
+        "fetch_warnings": _dedupe_texts(fetch_warnings),
+        "artifacts": {
+            "hk_index": _build_filename("fundflow_hk_index", resolved_date),
+            "stock_fundflow": f"stock_fundflow_hk_today_full_{resolved_date}.json",
+            "southbound": _build_filename("fundflow_hk_southbound", resolved_date),
+        },
+    }
+    result["market_verdict"] = generate_hk_verdict(result)
+    return result

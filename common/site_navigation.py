@@ -9,7 +9,8 @@ from typing import Iterable, Mapping
 
 SITE_TABS = [
     {"key": "home", "label": "首页", "href": "index.html"},
-    {"key": "fundflow", "label": "资金流", "href": "fundflow.html"},
+    {"key": "fundflow", "label": "A股资金流", "href": "fundflow.html"},
+    {"key": "fundflow_hk", "label": "港股资金流", "href": "fundflow_hk.html"},
     {"key": "stocktrend_ashare", "label": "A股走势", "href": "stocktrend_ashare.html"},
     {"key": "stocktrend_hk", "label": "港股走势", "href": "stocktrend_hk.html"},
 ]
@@ -31,7 +32,7 @@ html, body {
   width: min(720px, calc(100vw - 20px));
   z-index: 9999;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   padding: 10px;
   border-radius: 18px;
@@ -129,7 +130,7 @@ html, body {
 }
 .site-hub-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 16px;
   margin-top: 20px;
 }
@@ -186,8 +187,8 @@ html, body {
   .site-hub-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
-  .site-nav { gap: 6px; padding: 8px; }
-  .site-nav-item { font-size: 12px; padding: 10px 6px; }
+  .site-nav { gap: 5px; padding: 8px; }
+  .site-nav-item { font-size: 11.5px; padding: 10px 4px; }
   .site-hub { padding: 18px 12px 108px; }
   .site-hub-hero { padding: 20px 18px; border-radius: 18px; }
   .site-hub h1 { font-size: 26px; }
