@@ -2,13 +2,14 @@
   "_meta": {
     "schema_version": 1,
     "cache_scope": "static_cache",
-    "saved_at": "2026-09-01 15:59:37",
+    "saved_at": "2026-09-02 15:36:42",
     "ttl_hours": null,
     "source": "AKShare 申万成分股",
     "cache_version": 1,
     "refresh_policy": "refresh_when_required_codes_are_missing",
-    "refresh_reason": "missing_codes:301688,301689,301697,301699,601091,601123,603448,688801,688835,688837,689009",
+    "refresh_reason": "missing_codes:301686,301688,301689,301697,301699,601091,601123,603448,688801,688835,688837,689009",
     "missing_codes_refreshed": [
+      "301686",
       "301688",
       "301689",
       "301697",
@@ -5271,6 +5272,6 @@
     "failed_industries": [],
     "is_complete": true,
     "mutable": true,
-    "updated_at": "2026-09-01 15:59:37"
+    "updated_at": "2026-09-02 15:36:42"
   }
 }
