@@ -395,8 +395,8 @@ def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
                 "margin": financial.get("margin"),
                 "liab": financial.get("liab"),
                 "eps": financial.get("eps"),
-                "financial_report_year": financial.get("report_year"),
-                "financial_report_period": financial.get("report_period"),
+                "financial_report_year": None,  # 抑制卡片/弹窗里的「X年报」字样（港股同处理）
+                "financial_report_period": None,  # 抑制卡片/弹窗里的「年报」字样（report_period 实为字面量"年报"，无意义；港股同处理）
                 "financial_source": financial.get("source"),
                 "financial_as_of": financial.get("as_of"),
                 "div5": dividends.get("div5") or [],
@@ -529,7 +529,7 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
                 "roe": fin_analysis.get("roe") if fin_analysis.get("roe") is not None else fin.get("roe"),
                 "margin": fin_analysis.get("margin"),
                 "liab": fin_analysis.get("liab"),
-                "financial_report_year": fin_analysis.get("report_year"),
+                "financial_report_year": None,  # 港股财务分析源 report_year 不可信(返回2016-2018旧期)，抑制卡片年报文案
                 "financial_source": fin_analysis.get("source") or fin.get("source"),
                 "financial_as_of": fin_analysis.get("as_of") or fin.get("as_of"),
                 "div5": dividends.get("div5") or [],
