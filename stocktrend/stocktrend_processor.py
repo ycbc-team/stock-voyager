@@ -573,7 +573,7 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
             "fetch_warnings": [item for item in [hist_warning, south_warning, _build_aggregate_warning(load_build_json(f"stocktrend_hk_financials_{trade_date}.json") or {}, "港股核心指标"), _build_aggregate_warning(load_build_json(f"stocktrend_hk_financial_analysis_{trade_date}.json") or {}, "港股财务分析"), _build_aggregate_warning(load_build_json(f"stocktrend_hk_dividends_{trade_date}.json") or {}, "港股分红派息")] if item],
         }
     )
-    return {"meta": meta, "sectors": base_data["sectors"], "combos": base_data["combos"], "stocks": stocks}
+    return {"meta": meta, "sectors": base_data["sectors"], "stocks": stocks}
 
 
 def collect_pages(data_date: Optional[str] = None, market: str = "all") -> Dict[str, Dict[str, Any]]:
