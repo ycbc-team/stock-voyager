@@ -236,16 +236,6 @@ def _render_page_script() -> str:
   }
 
   document.addEventListener('click', function (event) {
-    const anchorBtn = event.target.closest('.modal-anchor-btn');
-    if (anchorBtn) {
-      const targetId = anchorBtn.getAttribute('data-target');
-      const target = targetId ? document.getElementById(targetId) : null;
-      if (!target) return;
-      event.preventDefault();
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      return;
-    }
-
     const closer = event.target.closest('.modal-return, .modal-close, .modal-backdrop');
     if (!closer) return;
 
@@ -650,6 +640,18 @@ def _render_score_module(section_prefix: str, score: Optional[int], score_parts:
           <div class="reason">综合评分 <b style="color:#d29922">{total} / 100</b>（模型估算，仅供参考）。</div>
           {''.join(bars)}
           <div class="note">评分逻辑：ROE盈利能力(30) + 估值合理性(25) + 分红回报(15) + 财务稳健/资产质量(15) + 护城河/现金流(15)。含主观假设，不构成投资建议。</div>
+          <div style="margin-top:14px;padding:12px 14px;border:1px solid #30363d;border-radius:8px;background:#0d1117;">
+            <div style="font-weight:600;color:#e6edf3;margin-bottom:6px;">各指标分值区间说明</div>
+            <div style="color:#8b949e;font-size:12px;margin-bottom:8px;">综合评分 = 五维加权（满分 100），各维度按以下区间计分：</div>
+            <div style="color:#c9d1d9;font-size:12.5px;line-height:1.95;">
+              <div><b style="color:#58a6ff">ROE盈利能力（权重30）</b>：ROE ≥ 20% → 30分；15% ≤ ROE &lt; 20% → 24分；10% ≤ ROE &lt; 15% → 18分；5% ≤ ROE &lt; 10% → 12分；ROE &lt; 5% 或未披露 → 6分。</div>
+              <div><b style="color:#58a6ff">估值合理性 PE（权重25）</b>：PE ≤ 15 → 22分；15 &lt; PE ≤ 20 → 17分；20 &lt; PE ≤ 25 → 13分；25 &lt; PE ≤ 30 → 9分；PE &gt; 30 或未披露 → 5分。※ 若处 52 周估值低位（分位 ≤ 40%），额外 +3 分（封顶 25）。</div>
+              <div><b style="color:#58a6ff">分红回报（权重15）</b>：股息率 ≥ 4% → 15分；3% ≤ 股息率 &lt; 4% → 12分；2% ≤ &lt; 3% → 9分；1% ≤ &lt; 2% → 6分；&lt; 1% 或未披露 → 3分。</div>
+              <div><b style="color:#58a6ff">财务稳健/资产质量（权重15）</b>：资产负债率 &lt; 40% → 15分；40% ≤ &lt; 50% → 12分；50% ≤ &lt; 60% → 9分；60% ≤ &lt; 70% → 6分；≥ 70% 或未披露 → 3分。</div>
+              <div><b style="color:#58a6ff">护城河/现金流（权重15）</b>：毛利率 ≥ 60% → 15分；40% ≤ &lt; 60% → 12分；25% ≤ &lt; 40% → 9分；15% ≤ &lt; 25% → 6分；&lt; 15% 或未披露 → 3分。</div>
+            </div>
+            <div class="note" style="margin-top:8px;">含主观假设，模型估算，仅供研究参考，不构成投资建议。</div>
+          </div>
         </div>'''
 
 
@@ -676,8 +678,6 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
     signal = stock.get("signal", 1)
     modal_id = f"m-{market_code}-{stock['code']}"
     section_prefix = f"{market_code}-{stock['code']}"
-    risks = stock.get("risks") or ["暂无风险备注"]
-    risks_html = "".join(f'<div class="risk">{item}</div>' for item in risks[:3])
     pos_text = "—" if stock.get("pos") is None else f"{stock['pos']:.0f}%"
     pe_text = "—" if stock.get("pe") is None else f"{stock['pe']:.2f}"
     pb_text = "—" if stock.get("pb") is None else f"{stock['pb']:.2f}"
@@ -746,16 +746,6 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
           <div class="ind">📌 {ind_text}</div>
           <div class="scorepill" style="background:#388bfd">巴菲特评分 {("—" if score is None else score)}</div>
         </div>
-        <div class="modal-anchor-nav">
-          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-snapshot">行情</button>
-          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-build">建仓</button>
-          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-capital">资金</button>
-          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-quality">质量</button>
-          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-dividend">分红</button>
-          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-score">评分</button>
-          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-risk">风险</button>
-          <button type="button" class="modal-anchor-btn" data-target="{section_prefix}-summary">总结</button>
-        </div>
         <div class="module" id="{section_prefix}-snapshot">
           <h2><span class="num">1</span>行情快照（{snap_md}收盘后）</h2>
           <div class="metric-cards">
@@ -796,19 +786,6 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
           {_render_dividend_panorama(stock, fin3_annual, market_meta["currency_unit"])}
         </div>
         {_render_score_module(section_prefix, score, score_parts, stock)}
-        <div class="module" id="{section_prefix}-risk">
-          <h2><span class="num">7</span>风险提示（重点3条）</h2>
-          {risks_html}
-        </div>
-        <div class="module" id="{section_prefix}-summary">
-          <h2><span class="num">8</span>进一步分析 · 一句话总结</h2>
-          <div class="summary">
-            <b style="color:#f0c040">{stock.get("zh", stock["code"])}</b>：{stock.get("summary", "")}<br><br>
-            <b>护城河：</b>{stock.get("summary_moat", "")}<br>
-            <b>行业趋势：</b>{stock.get("summary_trend", "")}<br><br>
-            <b>操作思路：</b>{stock.get("summary_idea", "")}
-          </div>
-        </div>
       </div>
     </div>
   </div>'''

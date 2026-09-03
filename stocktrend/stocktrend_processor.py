@@ -67,11 +67,11 @@ def _build_issue_text(label: str, issue: Optional[str]) -> Optional[str]:
     return f"{label}异常：{text}"
 
 
-def _score_band(value: Optional[float], bands: List[tuple], default: int = 5) -> int:
+def _score_band(value: Optional[float], bands: List[tuple], default: int = 5, reverse: bool = False) -> int:
     if value is None:
         return default
     for threshold, score in bands:
-        if value >= threshold:
+        if (value <= threshold) if reverse else (value >= threshold):
             return score
     return default
 
@@ -81,12 +81,12 @@ def _compute_score(roe: Optional[float], pe: Optional[float], div: Optional[floa
     """综合评分(0-100) + 分项(模型估算，仅供参考)。分项权对齐外部: ROE30/估值25/分红15/财务15/护城河15。"""
     parts: Dict[str, int] = {}
     parts["roe"] = _score_band(roe, [(20, 30), (15, 24), (10, 18), (5, 12)], 6)
-    val = _score_band(pe, [(15, 22), (20, 17), (25, 13), (30, 9)], 5)
+    val = _score_band(pe, [(15, 22), (20, 17), (25, 13), (30, 9)], 5, reverse=True)
     if pos is not None and pos <= 40:
         val = min(val + 3, 25)
     parts["val"] = val
     parts["div"] = _score_band(div, [(4, 15), (3, 12), (2, 9), (1, 6)], 3)
-    parts["fin"] = _score_band(liab, [(40, 15), (50, 12), (60, 9), (70, 6)], 3)
+    parts["fin"] = _score_band(liab, [(40, 15), (50, 12), (60, 9), (70, 6)], 3, reverse=True)
     parts["moat"] = _score_band(margin, [(60, 15), (40, 12), (25, 9), (15, 6)], 3)
     total = sum(parts.values())
     return total, parts
@@ -147,42 +147,69 @@ def _compute_build(price: Optional[float], w52l: Optional[float], w52h: Optional
 
 
 def _compute_defense(fin3: List[Dict[str, Any]], last_div: Optional[float] = None) -> Dict[str, Any]:
-    """近3年盈利质量排雷(模型估算)。输出「排雷结论」要点列表。"""
+    """近3年盈利质量排雷(模型估算)。输出「排雷结论」要点列表。
+
+    判定逻辑对齐外部链接（定性多维）：以绝对水平 + 趋势方向为准，
+    低负债 / 高 ROE / 正现金流 / 稳毛利率即判「通过」；仅当出现明确
+    恶化信号（高杠杆、现金流转负、毛利率暴跌、ROE 腰斩）才降级。
+    废弃旧版「关键词计数」法——其把低负债股的微小波动误判为风险。
+    """
     if not fin3:
         return {"level": "关注", "reasons": ["近3年财报暂缺，无法自动排雷，仅供参考"]}
     roes = [f["roe"] for f in fin3 if f.get("roe") is not None]
     liabs = [f["liab"] for f in fin3 if f.get("liab") is not None]
     margins = [f["margin"] for f in fin3 if f.get("margin") is not None]
     ocfps = [f["ocfps"] for f in fin3 if f.get("ocfps") is not None]
-    reasons: List[str] = []
-    if len(roes) >= 2:
-        if roes[-1] < roes[0] * 0.85:
-            reasons.append(f"ROE 由 {roes[0]:.1f}% 回落至 {roes[-1]:.1f}%，关注盈利拐点")
+    good: List[str] = []
+    bad: List[str] = []
+    # 1) ROE：绝对水平（>=15% 为优质线）
+    if roes:
+        if min(roes) >= 15:
+            good.append(f"ROE 维持在 {min(roes):.1f}%-{max(roes):.1f}% 高位，盈利能力稳健")
+        elif min(roes) >= 8:
+            good.append(f"ROE 约 {min(roes):.1f}%-{max(roes):.1f}%，盈利尚可")
         else:
-            reasons.append(f"ROE 维持在 {min(roes):.1f}%-{max(roes):.1f}% 区间，盈利相对稳定")
-    if len(liabs) >= 2:
-        if liabs[-1] <= liabs[0] + 2:
-            reasons.append(f"资产负债率 {liabs[-1]:.1f}%，财务结构稳健")
+            bad.append(f"ROE 降至 {min(roes):.1f}%，盈利能力偏弱")
+    # 2) 资产负债率：绝对水平为主 + 最新一期方向
+    if liabs:
+        latest = liabs[-1]
+        trend_up = len(liabs) >= 2 and latest > liabs[-2] + 3
+        if latest < 40:
+            good.append(f"资产负债率 {latest:.1f}%，绝对水平低、财务结构稳健"
+                        + ("（较上期小幅上升）" if trend_up else ""))
+        elif latest < 65:
+            if trend_up:
+                bad.append(f"资产负债率升至 {latest:.1f}%，关注财务杠杆")
+            else:
+                good.append(f"资产负债率 {latest:.1f}%，处于行业中游、结构可控")
         else:
-            reasons.append(f"资产负债率升至 {liabs[-1]:.1f}%，关注财务杠杆")
+            bad.append(f"资产负债率高达 {latest:.1f}%，财务杠杆偏高")
+    # 3) 经营现金流
     if ocfps:
         if min(ocfps) > 0:
-            cov_txt = ""
-            if last_div:
-                cov = ocfps[0] / last_div if last_div else None
-                cov_txt = f"（覆盖分红约 {cov:.2f} 倍）" if cov else ""
-            reasons.append(f"经营现金流持续为正，主业回款健康{cov_txt}")
+            cov = (ocfps[0] / last_div) if last_div else None
+            cov_txt = f"（覆盖分红约 {cov:.2f} 倍）" if cov else ""
+            good.append(f"经营现金流持续为正，主业回款健康{cov_txt}")
         else:
-            reasons.append("经营现金流阶段性转负，关注回款质量")
+            bad.append("经营现金流阶段性转负，关注回款质量")
+    # 4) 毛利率稳定性
     if len(margins) >= 2:
-        if abs(margins[-1] - margins[0]) <= 3:
-            reasons.append(f"毛利率约 {margins[-1]:.1f}%，主业盈利能力未明显恶化")
+        if abs(margins[-1] - margins[0]) <= 5:
+            good.append(f"毛利率约 {margins[-1]:.1f}%，主业盈利能力稳定")
         else:
-            reasons.append(f"毛利率由 {margins[0]:.1f}% 变动至 {margins[-1]:.1f}%，关注盈利结构")
-    if not reasons:
-        reasons = ["各项指标稳健，未见明显排雷信号"]
-    caution = sum(1 for r in reasons if any(k in r for k in ["回落", "升至", "转负", "关注", "恶化", "波动"]))
-    level = "通过" if caution == 0 else ("关注" if caution <= 1 else "不通过")
+            bad.append(f"毛利率由 {margins[0]:.1f}% 变动至 {margins[-1]:.1f}%，关注盈利结构")
+    if not good and not bad:
+        return {"level": "关注", "reasons": ["各项指标稳健，未见明显排雷信号"]}
+    # 判定：有 bad 才降级
+    if not bad:
+        level = "通过"
+        reasons = good
+    elif len(bad) == 1:
+        level = "关注"
+        reasons = good + bad
+    else:
+        level = "不通过"
+        reasons = good + bad
     return {"level": level, "reasons": reasons}
 
 
