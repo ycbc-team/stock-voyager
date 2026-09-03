@@ -830,33 +830,6 @@ def _render_roster(data: Dict[str, Any]) -> str:
 </div>'''
 
 
-def _render_combos(data: Dict[str, Any]) -> str:
-    combos = data.get("combos") or []
-    if not combos:
-        return ""
-    market_code = data.get("meta", {}).get("market_code", "hk")
-    stock_map = {item["code"]: item for item in data["stocks"]}
-    cards = []
-    for combo in combos:
-        labels = []
-        for code in combo.get("codes", []):
-            if code not in stock_map:
-                continue
-            labels.append(
-                f'<label class="combo-stock" for="m-{market_code}-{code}">{stock_map[code]["zh"]} {code}</label>'
-            )
-        cards.append(f'''<div class="combo-card">
-  <div class="combo-title {combo.get("cls", "")}">{combo.get("title", "")}</div>
-  <div class="combo-stocks">{" ".join(labels)}</div>
-  <div class="combo-desc">{combo.get("desc", "")}</div>
-</div>''')
-    return f'''<div class="combo-section">
-  <h2>{data["meta"].get("combo_section_title", "组合观察")}</h2>
-  {"".join(cards)}
-  <div class="note" style="margin-top:6px">{data["meta"].get("combo_note", "")}</div>
-</div>'''
-
-
 def render_page(data: Dict[str, Any]) -> str:
     css = _load_css()
     meta = data["meta"]
@@ -878,14 +851,10 @@ def render_page(data: Dict[str, Any]) -> str:
   <div class="tag">静态收盘快照 · 非实时 · {meta.get("snap_iso", meta.get("tag", ""))}</div>
   <h1>{meta.get("title", "")}</h1>
   <div class="subtitle">{_public_subtitle(meta)}</div>
-  <div class="date">{_public_date_text(meta)}</div>
+  <div class="databadge"><b>这不是实时行情页面。</b> 当前页面只展示收盘后的静态结果，适合盘后复盘和清单式跟踪，不展示盘中实时跳动数据。</div>
 </div>
-<div class="databadge"><b>这不是实时行情页面。</b> 当前页面只展示收盘后的静态结果，适合盘后复盘和清单式跟踪，不展示盘中实时跳动数据。</div>
-<div class="databadge">{_public_databadge(meta)}</div>
 '''
     )
-    for warning in meta.get("fetch_warnings") or []:
-        html.append(f'<div class="databadge">⚠️ 数据抓取提示：{warning}</div>\n')
     sector_class_map = {
         "consumer": "consumer",
         "healthcare": "finance",
@@ -902,9 +871,14 @@ def render_page(data: Dict[str, Any]) -> str:
             html.append(_render_card(stock, market_code, meta.get("snap_iso")))
         html.append("</div>\n</div>\n")
     html.append(_render_roster(data))
-    html.append(_render_combos(data))
+    notes = []
+    notes.append(f'<div class="date">{_public_date_text(meta)}</div>')
+    notes.append(f'<div class="databadge">{_public_databadge(meta)}</div>')
+    for warning in meta.get("fetch_warnings") or []:
+        notes.append(f'<div class="databadge">⚠️ 数据抓取提示：{warning}</div>')
     html.append(
-        f'''<div class="disclaimer"><p>{meta.get("disclaimer", "")}</p></div>
+        f'''<div class="page-notes">{''.join(notes)}</div>
+<div class="disclaimer"><p>{meta.get("disclaimer", "")}</p></div>
 <div class="footer">{_public_footer(meta)}</div>
 </div>
 {render_site_nav(nav_active)}

@@ -145,13 +145,6 @@ A_SHARE_SECTORS = [
 ]
 
 
-A_SHARE_COMBOS = [
-    {"cls": "combo-stable", "title": "稳健红利组合", "codes": ["600941", "600900", "601088", "600036", "601318"], "desc": "偏向现金流与分红能力，适合把握 A 股核心资产中的稳健底仓。"},
-    {"cls": "combo-growth", "title": "核心消费组合", "codes": ["600519", "600887", "000333", "603605", "000538"], "desc": "聚焦品牌壁垒与消费龙头，适合中长期跟踪景气与估值切换。"},
-    {"cls": "combo-aggressive", "title": "景气制造组合", "codes": ["300750", "002594", "002415", "600150", "601899"], "desc": "弹性更强，受行业景气与周期波动影响更大，适合分批布局。"},
-]
-
-
 def _a_stock(code: str, zh: str, sector: str, l1: str, l2: str, l2_code: str, border: str) -> Dict[str, Any]:
     return {"code": code, "zh": zh, "en": zh, "sector": sector, "l1": l1, "l2": l2, "l2_code": l2_code, "border": border}
 

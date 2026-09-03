@@ -31,7 +31,6 @@ from common.storage import write_json
 from stocktrend.stocktrend_data_fetcher import (
     A_SHARE_STOCKS,
     A_SHARE_SECTORS,
-    A_SHARE_COMBOS,
     SECTOR_RISK_TEXT,
     _to_float,
     _fmt_pct,
@@ -446,12 +445,9 @@ def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
             "show_roster": True,
             "roster_title": "ROE 分层观察名单（A股）",
             "roster_note": "若公开财务摘要可得，则按最近年度 ROE 分层展示；缺失则不强行补值。",
-            "combo_section_title": "三种观察组合",
-            "combo_note": "组合仅用于页面浏览时的快速分组，不代表实际持仓建议。",
             "fetch_warnings": [item for item in [hist_warning, north_warning, _build_aggregate_warning(load_build_json(f"stocktrend_ashare_financials_{trade_date}.json") or {}, "A股财务分析"), _build_aggregate_warning(load_build_json(f"stocktrend_ashare_dividends_{trade_date}.json") or {}, "A股分红")] if item],
         },
         "sectors": A_SHARE_SECTORS,
-        "combos": A_SHARE_COMBOS,
         "stocks": stocks,
     }
 
@@ -563,7 +559,7 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
             "date": f"非实时页面：{trade_date} 收盘快照",
             "databadge": "⚠️ 数据口径：本页仅展示收盘后的静态结果；价格、估值、南向持股、财务与分红为公开数据整理，缺失字段直接显示“—”。",
             "modal_databadge": "⚠️ 本页为静态模板 + 实时数据：价格、涨跌、成交额对应收盘口径；PE / PB / 股息率、财务分析、分红派息、南向持股均优先取公开接口实时结果。",
-            "disclaimer": "⚠️ 免责声明：页面仅做公开数据整理与展示，不构成投资建议。行业分类、组合分组与风险提示为静态模板配置；价格、估值、财务、分红、南向持股为实时公开数据。",
+            "disclaimer": "⚠️ 免责声明：页面仅做公开数据整理与展示，不构成投资建议。行业分类与风险提示为静态模板配置；价格、估值、财务、分红、南向持股为实时公开数据。",
             "footer": f"{meta.get('title', '港股核心个股走势分析')} · 静态收盘快照 · {trade_date}",
             "snap_iso": trade_date,
             "currency_unit": "港元",

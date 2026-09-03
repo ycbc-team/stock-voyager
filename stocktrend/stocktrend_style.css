@@ -43,6 +43,11 @@ body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; bac
 .disclaimer { background:#1c1408; border:1px solid #3d2810; border-radius:12px; padding:14px; margin:14px 0 18px; }
 .disclaimer p { color:#d29922; font-size:11px; line-height:1.7; }
 .footer { text-align:center; padding:16px; color:#6e7681; font-size:11px; }
+.page-notes { text-align:center; margin:8px 0 14px; padding:16px 14px; border:1px solid #30363d; border-radius:12px; background:#161b22; }
+.page-notes .tag { display:inline-block; font-size:11px; color:#58a6ff; background:rgba(88,166,255,.1); border:1px solid rgba(88,166,255,.3); padding:3px 12px; border-radius:20px; margin-bottom:10px; }
+.page-notes .subtitle { font-size:13px; color:#8b949e; margin-bottom:6px; }
+.page-notes .date { font-size:11px; color:#6e7681; margin-top:8px; }
+.page-notes .databadge { margin-bottom:10px; }
 .stock-item { position:relative; }
 .modal-toggle { position:absolute; width:0; height:0; opacity:0; pointer-events:none; }
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.78); display:none; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:24px; z-index:9999; }
@@ -171,7 +176,7 @@ body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; bac
   .kv { grid-template-columns:1fr 1fr; gap:8px 12px; }
   .conclusion-bar { flex-direction:column; align-items:flex-start; }
   .conclusion-bar .cb-tag { align-self:flex-start; }
-  .roe-section, .combo-section { padding:14px; }
+  .roe-section { padding:14px; }
   /* yield-vs 移动端保持 3 列(与外部链接一致),字号与内边距缩小 */
   .yield-vs { grid-template-columns:repeat(3,1fr); gap:6px; }
   .yield-vs .yv-item { padding:10px 4px; }
@@ -186,15 +191,3 @@ body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; bac
 .roe-tier:last-child { border-bottom:none; }
 .roe-label { font-weight:bold; min-width:96px; white-space:nowrap; }
 .roe-names { color:#c9d1d9; line-height:1.7; }
-.combo-section { background:linear-gradient(135deg,#161b22 0%,#0d1117 100%); border:1px solid #30363d; border-radius:16px; padding:18px; margin-bottom:14px; }
-.combo-section h2 { color:#f0c040; font-size:15px; margin-bottom:12px; text-align:center; }
-.combo-card { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
-.combo-card .combo-title { font-size:13px; font-weight:bold; }
-.combo-card .combo-stable { color:#3fb950; }
-.combo-card .combo-growth { color:#58a6ff; }
-.combo-card .combo-aggressive { color:#bc8cff; }
-.combo-card .combo-desc { font-size:12px; color:#8b949e; margin-top:6px; line-height:1.7; }
-.combo-card .combo-desc b { color:#f0c040; }
-.combo-stocks { margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; }
-.combo-stock { display:inline-block; font-size:12px; color:#e6edf3; background:rgba(88,166,255,.08); border:1px solid rgba(88,166,255,.25); padding:3px 10px; border-radius:8px; cursor:pointer; transition:background .15s; }
-.combo-stock:hover { background:rgba(88,166,255,.22); }

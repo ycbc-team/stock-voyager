@@ -2,7 +2,7 @@
   "_meta": {
     "schema_version": 1,
     "cache_scope": "static_cache",
-    "saved_at": "2026-09-02 15:36:42",
+    "saved_at": "2026-09-03 14:31:43",
     "ttl_hours": null,
     "source": "AKShare 申万成分股",
     "cache_version": 1,
@@ -5272,6 +5272,6 @@
     "failed_industries": [],
     "is_complete": true,
     "mutable": true,
-    "updated_at": "2026-09-02 15:36:42"
+    "updated_at": "2026-09-03 14:31:43"
   }
 }
