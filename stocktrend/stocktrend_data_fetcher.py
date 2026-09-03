@@ -138,19 +138,10 @@ def _load_hk_base_data() -> Dict[str, Any]:
 
 
 A_SHARE_SECTORS = [
+    {"key": "cycle", "title": "大周期板块", "label": "周期", "color": "#ff8c42"},
+    {"key": "tech", "title": "大科技板块", "label": "科技", "color": "#3fb950"},
     {"key": "consumer", "title": "大消费板块", "label": "消费", "color": "#f0c040"},
-    {"key": "healthcare", "title": "医药健康板块", "label": "医药", "color": "#58a6ff"},
-    {"key": "manufacturing", "title": "制造升级板块", "label": "制造", "color": "#ff8c42"},
-    {"key": "tech", "title": "科技成长板块", "label": "科技", "color": "#3fb950"},
-    {"key": "finance", "title": "金融地产板块", "label": "金融", "color": "#bc8cff"},
-    {"key": "resource", "title": "资源公用板块", "label": "资源", "color": "#f85149"},
-]
-
-
-A_SHARE_COMBOS = [
-    {"cls": "combo-stable", "title": "稳健红利组合", "codes": ["600941", "600900", "601088", "600036", "601318"], "desc": "偏向现金流与分红能力，适合把握 A 股核心资产中的稳健底仓。"},
-    {"cls": "combo-growth", "title": "核心消费组合", "codes": ["600519", "600887", "000333", "603605", "000538"], "desc": "聚焦品牌壁垒与消费龙头，适合中长期跟踪景气与估值切换。"},
-    {"cls": "combo-aggressive", "title": "景气制造组合", "codes": ["300750", "002594", "002415", "600150", "601899"], "desc": "弹性更强，受行业景气与周期波动影响更大，适合分批布局。"},
+    {"key": "finance", "title": "大金融与公用事业板块", "label": "金融公用", "color": "#58a6ff"},
 ]
 
 
@@ -158,49 +149,53 @@ def _a_stock(code: str, zh: str, sector: str, l1: str, l2: str, l2_code: str, bo
     return {"code": code, "zh": zh, "en": zh, "sector": sector, "l1": l1, "l2": l2, "l2_code": l2_code, "border": border}
 
 
+# 分组与顺序严格对齐外部链接「一级行业个股走势分析」(bj8 部署版)
+# 大周期 / 大科技 / 大消费 / 大金融与公用事业
 A_SHARE_STOCKS = [
+    # —— 大周期板块（8个行业）——
+    _a_stock("601088", "中国神华", "cycle", "资源公用", "煤炭", "6010", "red"),
+    _a_stock("600938", "中国海油", "cycle", "资源公用", "石油天然气", "6020", "red"),
+    _a_stock("600309", "万华化学", "cycle", "资源公用", "化工材料", "6030", "orange"),
+    _a_stock("000708", "中信特钢", "cycle", "制造升级", "钢铁材料", "3020", "brown"),
+    _a_stock("601899", "紫金矿业", "cycle", "资源公用", "有色金属", "6040", "orange"),
+    _a_stock("300750", "宁德时代", "cycle", "制造升级", "动力电池", "3030", "green"),
+    _a_stock("600585", "海螺水泥", "cycle", "资源公用", "建材", "6050", "gray"),
+    _a_stock("601668", "中国建筑", "cycle", "基建建筑", "建筑央企", "5010", "blue"),
+    # —— 大科技板块（8个行业）——
+    _a_stock("002415", "海康威视", "tech", "科技成长", "安防设备", "4010", "green"),
+    _a_stock("002594", "比亚迪", "tech", "制造升级", "新能源汽车", "3040", "purple"),
+    _a_stock("300033", "同花顺", "tech", "科技成长", "金融 IT", "4020", "blue"),
+    _a_stock("600941", "中国移动", "tech", "通信运营", "运营商", "5020", "blue"),
+    _a_stock("002027", "分众传媒", "tech", "消费龙头", "广告传媒", "1080", "gray"),
+    _a_stock("600760", "中航沈飞", "tech", "制造升级", "军工装备", "3050", "red"),
+    _a_stock("600031", "三一重工", "tech", "制造升级", "工程机械", "3060", "orange"),
+    _a_stock("600150", "中国船舶", "tech", "制造升级", "船舶制造", "3070", "red"),
+    # —— 大消费板块（10个行业）——
     _a_stock("600519", "贵州茅台", "consumer", "消费龙头", "白酒", "1010", "yellow"),
     _a_stock("600887", "伊利股份", "consumer", "消费龙头", "乳制品", "1020", "green"),
-    _a_stock("600276", "恒瑞医药", "healthcare", "医药健康", "创新药", "2010", "blue"),
-    _a_stock("000333", "美的集团", "manufacturing", "制造升级", "白电", "3010", "orange"),
+    _a_stock("600276", "恒瑞医药", "consumer", "医药健康", "创新药", "2010", "blue"),
+    _a_stock("000333", "美的集团", "consumer", "家电消费", "白电", "3010", "orange"),
     _a_stock("600398", "海澜之家", "consumer", "消费龙头", "服饰零售", "1030", "brown"),
     _a_stock("603195", "公牛集团", "consumer", "消费龙头", "家居消费", "1040", "yellow"),
     _a_stock("601888", "中国中免", "consumer", "消费龙头", "免税零售", "1050", "orange"),
     _a_stock("600754", "锦江酒店", "consumer", "消费龙头", "酒店旅游", "1060", "gray"),
     _a_stock("603605", "珀莱雅", "consumer", "消费龙头", "美妆护理", "1070", "purple"),
-    _a_stock("601088", "中国神华", "resource", "资源公用", "煤炭", "6010", "red"),
-    _a_stock("600938", "中国海油", "resource", "资源公用", "石油天然气", "6020", "red"),
-    _a_stock("600309", "万华化学", "resource", "资源公用", "化工材料", "6030", "orange"),
-    _a_stock("000708", "中信特钢", "manufacturing", "制造升级", "钢铁材料", "3020", "brown"),
-    _a_stock("601899", "紫金矿业", "resource", "资源公用", "有色金属", "6040", "orange"),
-    _a_stock("300750", "宁德时代", "manufacturing", "制造升级", "动力电池", "3030", "green"),
-    _a_stock("600585", "海螺水泥", "resource", "资源公用", "建材", "6050", "gray"),
-    _a_stock("601668", "中国建筑", "finance", "金融地产", "建筑央企", "5010", "blue"),
-    _a_stock("002415", "海康威视", "tech", "科技成长", "安防设备", "4010", "green"),
-    _a_stock("002594", "比亚迪", "manufacturing", "制造升级", "新能源汽车", "3040", "purple"),
-    _a_stock("300033", "同花顺", "tech", "科技成长", "金融 IT", "4020", "blue"),
-    _a_stock("600941", "中国移动", "finance", "金融地产", "运营商", "5020", "blue"),
-    _a_stock("002027", "分众传媒", "consumer", "消费龙头", "广告传媒", "1080", "gray"),
-    _a_stock("600760", "中航沈飞", "manufacturing", "制造升级", "军工装备", "3050", "red"),
-    _a_stock("600031", "三一重工", "manufacturing", "制造升级", "工程机械", "3060", "orange"),
+    _a_stock("000538", "云南白药", "consumer", "医药健康", "中药", "2020", "yellow"),
+    # —— 大金融与公用事业板块（7个行业）——
     _a_stock("600036", "招商银行", "finance", "金融地产", "银行", "5030", "blue"),
     _a_stock("601318", "中国平安", "finance", "金融地产", "保险", "5040", "purple"),
     _a_stock("600048", "保利发展", "finance", "金融地产", "房地产", "5050", "brown"),
-    _a_stock("600900", "长江电力", "resource", "资源公用", "水电", "6060", "green"),
-    _a_stock("603568", "伟明环保", "resource", "资源公用", "环保服务", "6070", "green"),
-    _a_stock("601816", "京沪高铁", "finance", "金融地产", "铁路运输", "5060", "gray"),
-    _a_stock("000538", "云南白药", "healthcare", "医药健康", "中药", "2020", "yellow"),
-    _a_stock("600150", "中国船舶", "manufacturing", "制造升级", "船舶制造", "3070", "red"),
+    _a_stock("600900", "长江电力", "finance", "资源公用", "水电", "6060", "green"),
+    _a_stock("603568", "伟明环保", "finance", "资源公用", "环保服务", "6070", "green"),
+    _a_stock("601816", "京沪高铁", "finance", "交通运输", "铁路运输", "5060", "gray"),
 ]
 
 
 SECTOR_RISK_TEXT = {
-    "consumer": ["消费需求恢复不及预期", "渠道或品牌竞争加剧", "高位估值阶段回撤放大"],
-    "healthcare": ["集采与政策扰动盈利节奏", "研发兑现与产品放量低于预期", "市场风格切换导致估值承压"],
-    "manufacturing": ["行业景气波动影响订单释放", "原材料价格扰动利润率", "资本开支阶段带来现金流压力"],
+    "cycle": ["商品价格中枢波动", "政策与供给节奏变化", "周期股高位回撤速度较快"],
     "tech": ["技术迭代快、竞争格局变化快", "高估值阶段波动更大", "机构持仓拥挤时回撤更明显"],
+    "consumer": ["消费需求恢复不及预期", "渠道或品牌竞争加剧", "高位估值阶段回撤放大"],
     "finance": ["宏观信用周期影响盈利", "政策与监管环境变化", "地产与利率周期传导估值波动"],
-    "resource": ["商品价格中枢波动", "政策与供给节奏变化", "周期股高位回撤速度较快"],
 }
 
 
@@ -285,11 +280,6 @@ def _build_holding_warning(payload: Dict[str, Any], label: str) -> Optional[str]
     return f"{label}接口本次部分失败：成功 {success} / {requested}；失败原因：{reason_text or '公开接口返回异常'}。对应失败股票持股项显示“—”。"
 
 
-def _build_issue_text(label: str, issue: Optional[str]) -> Optional[str]:
-    text = str(issue or "").strip()
-    if not text:
-        return None
-    return f"{label}异常：{text}"
 
 
 def _build_result_payload(source: str, trade_date: str, issue: Optional[str] = None, **data: Any) -> Dict[str, Any]:
@@ -531,15 +521,52 @@ def _fetch_ashare_dividends(code: str, trade_date: str) -> Dict[str, Any]:
         ak = _get_akshare_client()
         df = _safe_ak_call(f"{stock_code} A股分红", ak.stock_fhps_detail_em, symbol=stock_code)
         if df is None or df.empty:
-            return _build_result_payload("东方财富 A股分红", trade_date, issue="公开接口返回空数据", div5=[], div_years=[])
+            return _build_result_payload("东方财富 A股分红", trade_date, issue="公开接口返回空数据", div5=[], div_years=[], div_ttm_ps=None)
         rows = df.to_dict("records")
-        by_year = _pick_latest_row_per_year(rows, "报告期")
-        years = sorted(by_year.keys())[-5:]
+        rows_by_year: Dict[int, List[Dict[str, Any]]] = {}
+        for row in rows:
+            y = _extract_report_year(row.get("报告期")) or _extract_year_from_row(row, ["报告期"])
+            if y is None:
+                continue
+            rows_by_year.setdefault(y, []).append(row)
+        years = sorted(rows_by_year.keys())[-5:]
         divs: List[Optional[float]] = []
         for year in years:
-            cash_ratio = _to_float(by_year[year].get("现金分红-现金分红比例"))
-            divs.append(round(cash_ratio / 10.0, 4) if cash_ratio is not None else None)
-        return _build_result_payload("东方财富 A股分红", trade_date, div5=divs, div_years=years)
+            total = 0.0
+            cnt = 0
+            for row in rows_by_year[year]:
+                cash_ratio = _to_float(row.get("现金分红-现金分红比例"))
+                if cash_ratio is not None:
+                    total += cash_ratio / 10.0
+                    cnt += 1
+            divs.append(round(total, 4) if cnt else None)
+        # TTM 股息率：除权除息日在 [trade_date-365, trade_date] 的全部每股分红（含中期）之和
+        from datetime import datetime as _dt, timedelta as _td
+        try:
+            _tdate = _dt.strptime(trade_date, "%Y-%m-%d").date()
+        except Exception:
+            _tdate = None
+        _cutoff = (_tdate - _td(days=365)) if _tdate else None
+        _ttm, _ttm_cnt = 0.0, 0
+        _ttm_dates: List[str] = []
+        for row in rows:
+            _raw = str(row.get("除权除息日") or "")
+            _cr = _to_float(row.get("现金分红-现金分红比例"))
+            if not _raw or _cr is None:
+                continue
+            try:
+                _d = _dt.strptime(_raw[:10], "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if _cutoff and _cutoff <= _d <= _tdate:
+                _ttm += _cr / 10.0
+                _ttm_cnt += 1
+                _ttm_dates.append(_raw[:10])
+        _ttm_ps = round(_ttm, 4) if _ttm_cnt else None
+        return _build_result_payload(
+            "东方财富 A股分红", trade_date, div5=divs, div_years=years,
+            div_ttm_ps=_ttm_ps, div_ttm_dates=_ttm_dates,
+        )
 
     payload = _load_aggregate_by_code(
         f"stocktrend_ashare_dividends_{trade_date}.json",
@@ -549,7 +576,7 @@ def _fetch_ashare_dividends(code: str, trade_date: str) -> Dict[str, Any]:
         "东方财富 A股分红",
         trade_date,
     )
-    return (payload.get("items") or {}).get(code) or _build_result_payload("东方财富 A股分红", trade_date, issue="聚合缓存缺失", div5=[], div_years=[])
+    return (payload.get("items") or {}).get(code) or _build_result_payload("东方财富 A股分红", trade_date, issue="聚合缓存缺失", div5=[], div_years=[], div_ttm_ps=None)
 
 
 def _fetch_hk_financial_indicator(code: str, trade_date: str) -> Dict[str, Any]:
@@ -711,6 +738,69 @@ def _fetch_stock_connect_holdings(codes: List[str], trade_date: str, market_key:
     return payload
 
 
+
+
+def _report_period_raw(row: Dict[str, Any]) -> str:
+    """从财务分析行里提取报告期原始字符串（优先『报告期』字段，回退遍历所有值）。"""
+    for k, v in (row or {}).items():
+        if "报告期" in str(k) or "REPORT" in str(k).upper():
+            return str(v)
+    for v in (row or {}).values():
+        if re.search(r"\d{4}[-/]?\d{2}[-/]?\d{2}", str(v)):
+            return str(v)
+    return ""
+
+
+def _find_annual_row(rows: List[Dict[str, Any]]):
+    """找最近一个『年报』（报告期月份为 12）的行，返回 (年份, 行) 或 None。"""
+    best = None
+    for r in rows or []:
+        raw = _report_period_raw(r)
+        m = re.search(r"(\d{4})[-/]?(\d{1,2})", raw)
+        if not m:
+            continue
+        y = int(m.group(1))
+        mo = int(m.group(2)) if m.lastindex and m.lastindex >= 2 else 0
+        if mo == 12 and (best is None or y > best[0]):
+            best = (y, r)
+    return best
+
+
+def _build_fin3(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """取最近 5 个报告期年份的 ROE / 毛利率 / 资产负债率 / 每股收益 / 每股经营现金流。
+
+    每条带 annual 标记（报告期为 12 月 = 年报）。「盈利质量与排雷」与「分红回报全景」
+    优先用 annual=True 的年报口径，避免中报（半年值）造成 ROE 腰斩的错觉。
+    """
+    by_year: Dict[int, Dict[str, Any]] = {}
+    for row in rows or []:
+        raw = _report_period_raw(row)
+        m = re.search(r"(\d{4})[-/]?(\d{1,2})", raw)
+        year = int(m.group(1)) if m else None
+        if not year:
+            year = _extract_year_from_row(row, ["REPORT_DATE", "REPORT_YEAR", "REPORT_DATE_NAME"])
+        if not year:
+            continue
+        month = int(m.group(2)) if (m and m.lastindex and m.lastindex >= 2) else 12
+        # rows 已按报告期降序，setdefault 保留每年「最新一期」报告
+        by_year.setdefault(year, (month, row))
+    seq: List[Dict[str, Any]] = []
+    for year in sorted(by_year.keys(), reverse=True)[:5]:
+        month, row = by_year[year]
+        seq.append({
+            "year": year,
+            "annual": month == 12,
+            "roe": _to_float(row.get("ROEJQ")),
+            "margin": _to_float(row.get("XSMLL")),
+            "liab": _to_float(row.get("ZCFZL")),
+            "eps": _to_float(row.get("EPSJB")),
+            "ocfps": _to_float(row.get("MGJYXJJE")),
+        })
+    return seq
+
+
+
+
 def _fetch_ashare_financial_snapshot(code: str, trade_date: str) -> Dict[str, Any]:
     def loader(stock_code: str) -> Dict[str, Any]:
         symbol = f"{stock_code}.SH" if stock_code.startswith("6") else f"{stock_code}.SZ"
@@ -721,16 +811,21 @@ def _fetch_ashare_financial_snapshot(code: str, trade_date: str) -> Dict[str, An
         df = _safe_ak_call(f"{stock_code} A股财务分析", analysis_fn, symbol=symbol, indicator="按报告期")
         if df is None or df.empty:
             return _build_result_payload("东方财富 A股财务分析", trade_date, issue="公开接口返回空数据")
-        row = df.iloc[0].to_dict()
-        report_year = _extract_year_from_row(row, ["REPORT_DATE", "REPORT_YEAR", "REPORT_DATE_NAME"])
+        rows = df.to_dict("records")
+        annual = _find_annual_row(rows)
+        chosen = annual[1] if annual else (rows[0] if rows else {})
+        chosen_year = annual[0] if annual else _extract_year_from_row(chosen, ["REPORT_DATE", "REPORT_YEAR", "REPORT_DATE_NAME"])
+        period_label = "年报" if annual else "最新报告期"
         return _build_result_payload(
             "东方财富 A股财务分析",
             trade_date,
-            roe=_to_float(row.get("ROEJQ")),
-            margin=_to_float(row.get("XSMLL")),
-            liab=_to_float(row.get("ZCFZL")),
-            eps=_to_float(row.get("EPSJB")),
-            report_year=report_year,
+            roe=_to_float(chosen.get("ROEJQ")),
+            margin=_to_float(chosen.get("XSMLL")),
+            liab=_to_float(chosen.get("ZCFZL")),
+            eps=_to_float(chosen.get("EPSJB")),
+            report_year=chosen_year,
+            report_period=period_label,
+            fin3=_build_fin3(rows),
         )
 
     payload = _load_aggregate_by_code(
@@ -742,6 +837,54 @@ def _fetch_ashare_financial_snapshot(code: str, trade_date: str) -> Dict[str, An
         trade_date,
     )
     return (payload.get("items") or {}).get(code) or _build_result_payload("东方财富 A股财务分析", trade_date, issue="聚合缓存缺失")
+
+
+_MARGIN_TARGET_CODES = {item["code"] for item in A_SHARE_STOCKS}
+
+
+def _absorb_margin_rows(df: Any, code_col: str, date_col: Optional[str], out: Dict[str, Dict[str, Any]]) -> None:
+    """把单市场融资融券明细行筛入目标股票集合。"""
+    for row in df.to_dict("records"):
+        code = str(row.get(code_col) or "").zfill(6)
+        if code not in _MARGIN_TARGET_CODES:
+            continue
+        rec = out.setdefault(code, {})
+        if rec.get("margin_balance") is None:
+            rec["margin_balance"] = _to_float(row.get("融资余额"))
+        if rec.get("margin_buy") is None:
+            rec["margin_buy"] = _to_float(row.get("融资买入额"))
+        if date_col and rec.get("margin_date") is None:
+            rec["margin_date"] = str(row.get(date_col) or "")[:10]
+
+
+def _fetch_ashare_margin(trade_date: str) -> Dict[str, Dict[str, Any]]:
+    """融资融券明细：每交易日 2 次请求（上交所 + 深交所各一次全市场），筛出清单内个股的融资余额/融资买入额。
+
+    数据源为沪深交易所官网（AKShare stock_margin_detail_sse/szse，交易所 T 日收盘后披露次日可取）；
+    非融资融券标的自然不在返回表内，调用方以缺失视为「—」。
+    """
+    def loader() -> Dict[str, Any]:
+        ak = _get_akshare_client()
+        date_compact = trade_date.replace("-", "")
+        result: Dict[str, Dict[str, Any]] = {}
+        sse_fn = getattr(ak, "stock_margin_detail_sse", None)
+        if sse_fn is not None:
+            sse = _safe_ak_call("沪市融资融券明细", sse_fn, date=date_compact)
+            if sse is not None and not sse.empty:
+                _absorb_margin_rows(sse, "标的证券代码", "信用交易日期", result)
+        szse_fn = getattr(ak, "stock_margin_detail_szse", None)
+        if szse_fn is not None:
+            szse = _safe_ak_call("深市融资融券明细", szse_fn, date=date_compact)
+            if szse is not None and not szse.empty:
+                _absorb_margin_rows(szse, "证券代码", None, result)
+        for rec in result.values():
+            date_text = str(rec.get("margin_date") or trade_date)[:10]
+            if re.fullmatch(r"\d{8}", date_text):
+                date_text = f"{date_text[:4]}-{date_text[4:6]}-{date_text[6:8]}"
+            rec["margin_date"] = date_text
+        return result
+
+    return _load_or_fetch_build(f"stocktrend_ashare_margin_{trade_date}.json", loader) or {}
 
 
 def _fetch_ashare_northbound(trade_date: str) -> Dict[str, Dict[str, Any]]:
@@ -767,354 +910,5 @@ def _fetch_ashare_main_flow(codes: List[str], trade_date: str) -> Dict[str, Dict
     return payload
 
 
-def _build_signal(pos: Optional[float], pe: Optional[float], div: Optional[float], main_inflow: Optional[float]) -> int:
-    score = 0
-    if pos is not None and pos <= 35:
-        score += 1
-    elif pos is not None and pos >= 75:
-        score -= 1
-    if pe is not None and pe > 0 and pe <= 20:
-        score += 1
-    elif pe is not None and pe >= 35:
-        score -= 1
-    if div is not None and div >= 2.5:
-        score += 1
-    if main_inflow is not None and main_inflow > 0:
-        score += 1
-    if score >= 3:
-        return 0
-    if score <= 0:
-        return 2
-    return 1
 
 
-def _build_generic_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], main_inflow: Optional[float], north_pct: Optional[float]) -> Dict[str, Any]:
-    signal = _build_signal(pos, pe, None, main_inflow)
-    suggest = "可分批关注" if signal == 0 else "持有观察" if signal == 1 else "谨慎观望"
-    pe_text = "亏损或暂缺" if pe is None or pe <= 0 else f"PE {pe:.1f}"
-    pos_text = "52周位置暂缺" if pos is None else f"52周分位 {pos:.0f}%"
-    flow_text = "主力净流入暂缺" if main_inflow is None else f"主力净流入 {_fmt_signed_yi(main_inflow)}"
-    north_text = "北向持股暂缺" if north_pct is None else f"北向占总股本 {_fmt_pct(north_pct)}"
-    return {
-        "signal": signal,
-        "suggest": suggest,
-        "summary": f"{name} 当前以 {pe_text}、{pos_text} 为核心跟踪锚点，{flow_text}，{north_text}。",
-        "trend": f"{name} 处于 {pos_text} 区间，建议结合估值位置与成交活跃度做分批观察。",
-        "capital": f"{flow_text}；{north_text}。",
-        "risks": SECTOR_RISK_TEXT[sector_key],
-    }
-
-
-def _build_generic_hk_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], div: Optional[float], south_pct: Optional[float]) -> Dict[str, Any]:
-    signal = _build_signal(pos, pe, div, None)
-    suggest = "可分批关注" if signal == 0 else "持有观察" if signal == 1 else "谨慎观望"
-    pe_text = "亏损或暂缺" if pe is None or pe <= 0 else f"PE {pe:.1f}"
-    pos_text = "52周位置暂缺" if pos is None else f"52周分位 {pos:.0f}%"
-    south_text = "南向持股暂缺" if south_pct is None else f"南向持股占比 {_fmt_pct(south_pct)}"
-    div_text = "股息率暂缺" if div is None else f"股息率 {_fmt_pct(div)}"
-    return {
-        "signal": signal,
-        "suggest": suggest,
-        "summary": f"{name} 当前以 {pe_text}、{pos_text} 为核心跟踪锚点，{div_text}，{south_text}。",
-        "trend": f"{name} 处于 {pos_text} 区间，建议结合估值位置、区间涨跌与南向持股变化做跟踪。",
-        "capital": f"{south_text}；{div_text}。",
-        "risks": SECTOR_RISK_TEXT.get(sector_key, ["行业景气波动", "估值回撤风险", "市场风格切换风险"]),
-    }
-
-
-def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
-    ashare_codes = [item["code"] for item in A_SHARE_STOCKS]
-    spot_map = _load_ashare_spot(trade_date)
-    hist_payload = _load_hist_cache("ashare", ashare_codes, trade_date)
-    hist_warning = _build_aggregate_warning(hist_payload, "A股历史行情")
-    north_payload = _fetch_stock_connect_holdings(ashare_codes, trade_date, "ashare_northbound", "A股北向持股")
-    north_warning = _build_holding_warning(north_payload, "A股北向持股")
-    north_map = {
-        str(code).zfill(6): {
-            "north_shares": row.get("shares"),
-            "north_pct": row.get("pct"),
-            "north_date": row.get("holding_date"),
-            "issue": row.get("issue"),
-        }
-        for code, row in (north_payload.get("items") or {}).items()
-    }
-    flow_map = _fetch_ashare_main_flow(ashare_codes, trade_date)
-    stocks: List[Dict[str, Any]] = []
-
-    for meta in A_SHARE_STOCKS:
-        code = meta["code"]
-        spot = spot_map.get(code, {})
-        hist_rows = _fetch_hist_rows("ashare", code, trade_date)
-        hist_stats = _compute_hist_stats(hist_rows)
-        hist_last = _latest_hist_row(hist_rows)
-        prev_close = _prev_close_from_hist(hist_rows)
-        dividends = _fetch_ashare_dividends(code, trade_date)
-        financial = _fetch_ashare_financial_snapshot(code, trade_date)
-        north = north_map.get(code, {})
-        flow = flow_map.get(code, {})
-
-        price = _to_float(hist_last.get("收盘")) or _to_float(spot.get("最新价"))
-        last_div = None
-        for value in reversed(dividends.get("div5") or []):
-            if value is not None:
-                last_div = value
-                break
-        div_yield = None
-        if price not in (None, 0) and last_div is not None:
-            div_yield = last_div / price * 100
-
-        generated = _build_generic_texts(meta["zh"], meta["sector"], _to_float(spot.get("市盈率-动态")), hist_stats.get("pos"), flow.get("main_net_in"), north.get("north_pct"))
-        stock_issues = []
-        for issue_text in [
-            _build_issue_text("历史行情", None if hist_rows else "公开接口返回空数据"),
-            _build_issue_text("财务分析", financial.get("issue")),
-            _build_issue_text("分红", dividends.get("issue")),
-            _build_issue_text("北向持股", north.get("issue")),
-        ]:
-            if issue_text:
-                stock_issues.append(issue_text)
-        stocks.append(
-            {
-                **meta,
-                "market": "ashare",
-                "exchange": "SH" if code.startswith("6") else "SZ",
-                "price": price,
-                "chg": _to_float(hist_last.get("涨跌幅")) if _to_float(hist_last.get("涨跌幅")) is not None else _to_float(spot.get("涨跌幅")),
-                "change": _to_float(hist_last.get("涨跌额")) if _to_float(hist_last.get("涨跌额")) is not None else _to_float(spot.get("涨跌额")),
-                "pe": _to_float(spot.get("市盈率-动态")),
-                "pb": _to_float(spot.get("市净率")),
-                "div": div_yield,
-                "mkt_raw": _to_float(spot.get("总市值")),
-                "mkt": _fmt_market_cap(_to_float(spot.get("总市值"))),
-                "open": _to_float(hist_last.get("开盘")) or _to_float(spot.get("今开")),
-                "prev": prev_close if prev_close is not None else _to_float(spot.get("昨收")),
-                "amount_raw": _to_float(hist_last.get("成交额")) if _to_float(hist_last.get("成交额")) is not None else _to_float(spot.get("成交额")),
-                "amount": _fmt_yi(_to_float(hist_last.get("成交额")) if _to_float(hist_last.get("成交额")) is not None else _to_float(spot.get("成交额"))),
-                "turn": _to_float(hist_last.get("换手率")) if _to_float(hist_last.get("换手率")) is not None else _to_float(spot.get("换手率")),
-                "w52l": hist_stats.get("w52l"),
-                "w52h": hist_stats.get("w52h"),
-                "pos": hist_stats.get("pos"),
-                "chg5": hist_stats.get("chg5"),
-                "chg20": hist_stats.get("chg20"),
-                "chg60": hist_stats.get("chg60") if hist_stats.get("chg60") is not None else _to_float(spot.get("60日涨跌幅")),
-                "ytd": hist_stats.get("ytd") if hist_stats.get("ytd") is not None else _to_float(spot.get("年初至今涨跌幅")),
-                "roe": financial.get("roe"),
-                "margin": financial.get("margin"),
-                "liab": financial.get("liab"),
-                "eps": financial.get("eps"),
-                "financial_report_year": financial.get("report_year"),
-                "financial_source": financial.get("source"),
-                "financial_as_of": financial.get("as_of"),
-                "div5": dividends.get("div5") or [],
-                "div_years": dividends.get("div_years") or [],
-                "dividend_source": dividends.get("source"),
-                "dividend_as_of": dividends.get("as_of"),
-                "main_inflow": flow.get("main_net_in"),
-                "north_pct": north.get("north_pct"),
-                "north_shares": north.get("north_shares"),
-                "north_date": north.get("north_date"),
-                "north_value": None,
-                "history_as_of": trade_date,
-                "data_issues": stock_issues,
-                **generated,
-            }
-        )
-
-    return {
-        "meta": {
-            "market_code": "ashare",
-            "title": "A股核心个股走势分析",
-            "tag": f"静态收盘快照 · 非实时 · {trade_date}",
-            "subtitle": "聚焦核心 A 股清单，便于按估值、位置、资金面、财务与风险提示做盘后复盘。",
-            "date": f"非实时页面：{trade_date} 收盘快照",
-            "databadge": "⚠️ 数据口径：本页仅展示收盘后的静态结果；价格、估值、资金面、财务与分红为公开数据整理，缺失字段直接显示“—”。",
-            "modal_databadge": "⚠️ 本页为静态收盘快照：价格、涨跌、成交额、市值、估值均对应收盘口径；主力净流入为当日口径；分红 / 财务指标取公开披露值，若缺失则显示“—”。",
-            "disclaimer": "⚠️ 免责声明：页面仅做公开数据整理与展示，不构成投资建议。",
-            "footer": f"A股核心个股走势分析 · 静态收盘快照 · {trade_date}",
-            "snap_iso": trade_date,
-            "currency_unit": "元",
-            "money_unit": "亿元",
-            "flow_label": "主力净流入",
-            "holding_label": "北向持股",
-            "holding_pct_label": "北向占总股本比",
-            "show_roster": True,
-            "roster_title": "ROE 分层观察名单（A股）",
-            "roster_note": "若公开财务摘要可得，则按最近年度 ROE 分层展示；缺失则不强行补值。",
-            "combo_section_title": "三种观察组合",
-            "combo_note": "组合仅用于页面浏览时的快速分组，不代表实际持仓建议。",
-            "fetch_warnings": [item for item in [hist_warning, north_warning, _build_aggregate_warning(load_build_json(f"stocktrend_ashare_financials_{trade_date}.json") or {}, "A股财务分析"), _build_aggregate_warning(load_build_json(f"stocktrend_ashare_dividends_{trade_date}.json") or {}, "A股分红")] if item],
-        },
-        "sectors": A_SHARE_SECTORS,
-        "combos": A_SHARE_COMBOS,
-        "stocks": stocks,
-    }
-
-
-def _build_hk_page(trade_date: str) -> Dict[str, Any]:
-    base_data = _load_hk_base_data()
-    base_stocks = {str(item["code"]).zfill(5): item for item in base_data["stocks"]}
-    spot_map = _load_hk_spot(trade_date)
-    hk_codes = sorted(base_stocks.keys())
-    hist_payload = _load_hist_cache("hk", hk_codes, trade_date)
-    hist_warning = _build_aggregate_warning(hist_payload, "港股历史行情")
-    south_payload = _fetch_stock_connect_holdings(hk_codes, trade_date, "hk_southbound", "港股通持股")
-    south_warning = _build_holding_warning(south_payload, "港股通持股")
-    south_map = {
-        str(code).zfill(5): {
-            "south_shares": row.get("shares"),
-            "south_pct": row.get("pct"),
-            "south_date": row.get("holding_date"),
-            "issue": row.get("issue"),
-        }
-        for code, row in (south_payload.get("items") or {}).items()
-    }
-    stocks: List[Dict[str, Any]] = []
-
-    for code, base in base_stocks.items():
-        spot = spot_map.get(code, {})
-        hist_rows = _fetch_hist_rows("hk", code, trade_date)
-        hist_stats = _compute_hist_stats(hist_rows)
-        hist_last = _latest_hist_row(hist_rows)
-        prev_close = _prev_close_from_hist(hist_rows)
-        fin = _fetch_hk_financial_indicator(code, trade_date)
-        fin_analysis = _fetch_hk_financial_analysis(code, trade_date)
-        dividends = _fetch_hk_dividends(code, trade_date)
-        southbound = south_map.get(code, {})
-        generated = _build_generic_hk_texts(
-            base["zh"],
-            base["sector"],
-            fin.get("pe"),
-            hist_stats.get("pos"),
-            fin.get("div"),
-            southbound.get("south_pct"),
-        )
-        stock_issues = []
-        for issue_text in [
-            _build_issue_text("历史行情", None if hist_rows else "公开接口返回空数据"),
-            _build_issue_text("港股核心指标", fin.get("issue")),
-            _build_issue_text("财务分析", fin_analysis.get("issue")),
-            _build_issue_text("分红", dividends.get("issue")),
-            _build_issue_text("南向持股", southbound.get("issue")),
-        ]:
-            if issue_text:
-                stock_issues.append(issue_text)
-
-        stocks.append(
-            {
-                **base,
-                "market": "hk",
-                "exchange": "HK",
-                "price": _to_float(hist_last.get("收盘")) or _to_float(spot.get("最新价")),
-                "chg": _to_float(hist_last.get("涨跌幅")) if _to_float(hist_last.get("涨跌幅")) is not None else _to_float(spot.get("涨跌幅")),
-                "change": _to_float(hist_last.get("涨跌额")) if _to_float(hist_last.get("涨跌额")) is not None else _to_float(spot.get("涨跌额")),
-                "pe": fin.get("pe"),
-                "pb": fin.get("pb"),
-                "div": fin.get("div"),
-                "mkt_raw": fin.get("mkt_raw"),
-                "mkt": _fmt_market_cap(fin.get("mkt_raw")) if fin.get("mkt_raw") is not None else None,
-                "open": _to_float(hist_last.get("开盘")) or _to_float(spot.get("今开")),
-                "prev": prev_close if prev_close is not None else _to_float(spot.get("昨收")),
-                "amount_raw": _to_float(hist_last.get("成交额")) if _to_float(hist_last.get("成交额")) is not None else _to_float(spot.get("成交额")),
-                "amount": _fmt_yi(_to_float(hist_last.get("成交额")) if _to_float(hist_last.get("成交额")) is not None else _to_float(spot.get("成交额"))),
-                "turn": _to_float(hist_last.get("换手率")) if _to_float(hist_last.get("换手率")) is not None else _to_float(spot.get("换手率")),
-                "w52l": hist_stats.get("w52l"),
-                "w52h": hist_stats.get("w52h"),
-                "pos": hist_stats.get("pos"),
-                "chg5": hist_stats.get("chg5"),
-                "chg20": hist_stats.get("chg20"),
-                "chg60": hist_stats.get("chg60"),
-                "ytd": hist_stats.get("ytd"),
-                "roe": fin_analysis.get("roe") if fin_analysis.get("roe") is not None else fin.get("roe"),
-                "margin": fin_analysis.get("margin"),
-                "liab": fin_analysis.get("liab"),
-                "financial_report_year": fin_analysis.get("report_year"),
-                "financial_source": fin_analysis.get("source") or fin.get("source"),
-                "financial_as_of": fin_analysis.get("as_of") or fin.get("as_of"),
-                "div5": dividends.get("div5") or [],
-                "div_years": dividends.get("div_years") or [],
-                "dividend_source": dividends.get("source"),
-                "dividend_as_of": dividends.get("as_of"),
-                "south": southbound.get("south_pct"),
-                "south_pct": southbound.get("south_pct"),
-                "south_shares": southbound.get("south_shares"),
-                "south_date": southbound.get("south_date"),
-                "history_as_of": trade_date,
-                "signal": generated["signal"],
-                "capital": generated["capital"],
-                "trend": generated["trend"],
-                "suggest": generated["suggest"],
-                "summary": generated["summary"],
-                "risks": base.get("risks") or generated["risks"],
-                "data_issues": stock_issues,
-            }
-        )
-
-    meta = dict(base_data["meta"])
-    meta.update(
-        {
-            "market_code": "hk",
-            "tag": f"静态收盘快照 · 非实时 · {trade_date}",
-            "date": f"非实时页面：{trade_date} 收盘快照",
-            "databadge": "⚠️ 数据口径：本页仅展示收盘后的静态结果；价格、估值、南向持股、财务与分红为公开数据整理，缺失字段直接显示“—”。",
-            "modal_databadge": "⚠️ 本页为静态模板 + 实时数据：价格、涨跌、成交额对应收盘口径；PE / PB / 股息率、财务分析、分红派息、南向持股均优先取公开接口实时结果。",
-            "disclaimer": "⚠️ 免责声明：页面仅做公开数据整理与展示，不构成投资建议。行业分类、组合分组与风险提示为静态模板配置；价格、估值、财务、分红、南向持股为实时公开数据。",
-            "footer": f"{meta.get('title', '港股核心个股走势分析')} · 静态收盘快照 · {trade_date}",
-            "snap_iso": trade_date,
-            "currency_unit": "港元",
-            "money_unit": "亿港元",
-            "flow_label": "成交额",
-            "holding_label": "南向持股",
-            "holding_pct_label": "南向持股比例",
-            "show_roster": True,
-            "roster_title": "ROE 分层观察名单（港股）",
-            "roster_note": "若公开财务分析可得，则按最近可取 ROE 分层展示；缺失则不强行补值。",
-            "fetch_warnings": [item for item in [hist_warning, south_warning, _build_aggregate_warning(load_build_json(f"stocktrend_hk_financials_{trade_date}.json") or {}, "港股核心指标"), _build_aggregate_warning(load_build_json(f"stocktrend_hk_financial_analysis_{trade_date}.json") or {}, "港股财务分析"), _build_aggregate_warning(load_build_json(f"stocktrend_hk_dividends_{trade_date}.json") or {}, "港股分红派息")] if item],
-        }
-    )
-    return {"meta": meta, "sectors": base_data["sectors"], "combos": base_data["combos"], "stocks": stocks}
-
-
-def collect_pages(data_date: Optional[str] = None, market: str = "all") -> Dict[str, Dict[str, Any]]:
-    trade_date = data_date or detect_trade_date(market)
-    pages: Dict[str, Dict[str, Any]] = {}
-    if market in {"all", "ashare"}:
-        pages["ashare"] = _build_ashare_page(trade_date)
-    if market in {"all", "hk"}:
-        pages["hk"] = _build_hk_page(trade_date)
-    return pages
-
-
-def write_page_jsons(pages: Dict[str, Dict[str, Any]], out_dir: Optional[str] = None) -> List[str]:
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-    written = []
-    if "ashare" in pages:
-        path = os.path.join(out_dir, "stocktrend_ashare.json") if out_dir else save_data_json("stocktrend_ashare.json", pages["ashare"], source=pages["ashare"]["meta"].get("footer"), tags={"market": "ashare", "data_date": pages["ashare"]["meta"].get("snap_iso")})
-        if out_dir:
-            write_json(path, {"_meta": {"cache_scope": "page_data", "market": "ashare", "data_date": pages["ashare"]["meta"].get("snap_iso")}, "data": pages["ashare"]})
-        written.append(path)
-    if "hk" in pages:
-        path = os.path.join(out_dir, "stocktrend_hk.json") if out_dir else save_data_json("stocktrend_hk.json", pages["hk"], source=pages["hk"]["meta"].get("footer"), tags={"market": "hk", "data_date": pages["hk"]["meta"].get("snap_iso")})
-        if out_dir:
-            write_json(path, {"_meta": {"cache_scope": "page_data", "market": "hk", "data_date": pages["hk"]["meta"].get("snap_iso")}, "data": pages["hk"]})
-        written.append(path)
-    return written
-
-
-def main() -> Dict[str, Dict[str, Any]]:
-    parser = argparse.ArgumentParser(description="stocktrend 数据收集脚本：按请求拆分 JSON 产物，并汇总生成 stocktrend 页面 JSON")
-    parser.add_argument("--date", help="交易日 YYYY-MM-DD，默认使用共享交易日判断逻辑")
-    parser.add_argument("--market", choices=["all", "ashare", "hk"], default="all", help="输出市场，默认 all")
-    parser.add_argument("--out", help="输出目录，默认 <项目根>/build/data")
-    args = parser.parse_args()
-
-    pages = collect_pages(data_date=args.date, market=args.market)
-    written = write_page_jsons(pages, out_dir=args.out)
-    print("\n[✓] 数据产物已写出：")
-    for path in written:
-        print(f"    {path}")
-    return pages
-
-
-if __name__ == "__main__":
-    main()

@@ -86,7 +86,7 @@ def main() -> None:
     out = os.path.join(ROOT, "build", "data", "snapshot.json")
 
     if not args.skip_stocktrend:
-        from stocktrend.stocktrend_data_fetcher import collect_pages
+        from stocktrend.stocktrend_processor import collect_pages
 
         ok_s, pages = _safe("stocktrend", collect_pages, data_date, "all")
         if ok_s:

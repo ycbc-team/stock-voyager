@@ -15,8 +15,8 @@ from fundflow.fundflow_main import build_fundflow_report
 
 
 def build_stocktrend_report(data_date: str | None = None, out_dir: str | None = None, market: str = "all") -> Dict:
-    from stocktrend.stocktrend_data_fetcher import collect_pages
-    from stocktrend.stocktrend_data_fetcher import write_page_jsons
+    from stocktrend.stocktrend_processor import collect_pages
+    from stocktrend.stocktrend_processor import write_page_jsons
     from stocktrend.stocktrend_ui_renderer import render_page
     from stocktrend.stocktrend_ui_renderer import write_html
 
