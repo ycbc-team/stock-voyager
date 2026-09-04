@@ -5,7 +5,7 @@
 #   - workflow_dispatch : 支持手动触发
 #
 # 只重新生成两个走势 tab（stocktrend_ashare.html / stocktrend_hk.html）；
-# 资金流日报（fundflow.html）与导航首页保持「每日更新」，本流程从已部署站点拉回，
+# 资金流日报（fundflow.html / fundflow_hk.html）与导航首页保持「每日更新」，本流程从已部署站点拉回，
 # 随走势页一起重新发布，保证站点完整。
 name: A股港股走势-每周五
 
@@ -55,11 +55,11 @@ jobs:
           echo "--- build/site 内容 ---"
           ls -la build/site/
 
-      - name: 拉回已部署的资金流日报与导航首页（保持每日版本不变）
+      - name: 拉回已部署的资金流日报（A股+港股）与导航首页（保持每日版本不变）
         run: |
           mkdir -p build/site
           BASE="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY##*/}/"
-          for f in fundflow.html index.html; do
+          for f in fundflow.html fundflow_hk.html index.html; do
             echo "尝试拉回 $BASE$f"
             curl -fsSL "$BASE$f" -o "build/site/$f" || echo "（首次运行或暂缺，跳过 $f）"
           done
