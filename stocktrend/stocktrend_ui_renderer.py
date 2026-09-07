@@ -577,7 +577,7 @@ def _render_build_module(section_prefix: str, build: Optional[Dict[str, Any]], s
         vcls, vtxt = "wait", "⚠️ 估值偏高，等待回调"
     tier_rows = "".join(
         f'<tr><td>{t["name"]}</td><td class="v">{_fmt_price(t["price"])}</td>'
-        f'<td class="v {"good" if t["dy"] else ""}>{"—" if t["dy"] is None else f"{t["dy"]:.2f}%"}</td></tr>'
+        f'<td class="v {"good" if t["dy"] else ""}">{"—" if t["dy"] is None else f"{t["dy"]:.2f}%"}</td></tr>'
         for t in tiers
     )
     w52l_text = _fmt_price(_to_float(w52l))
