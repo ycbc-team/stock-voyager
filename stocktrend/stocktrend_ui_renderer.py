@@ -621,7 +621,10 @@ def _render_score_module(section_prefix: str, score: Optional[int], score_parts:
         "roe": ("—" if stock.get("roe") is None else f"ROE {stock['roe']:.1f}%"),
         "val": ("—" if stock.get("pe") is None else f"PE {stock['pe']:.2f}倍"),
         "div": ("—" if stock.get("div") is None else f"股息率 {stock['div']:.2f}%"),
-        "fin": ("—" if stock.get("liab") is None else f"负债率 {stock['liab']:.0f}%"),
+        "fin": (
+            f"PB {stock['pb']:.2f}" if stock.get("market") == "hk" and stock.get("pb") is not None
+            else ("—" if stock.get("liab") is None else f"负债率 {stock['liab']:.0f}%")
+        ),
         "moat": ("—" if stock.get("margin") is None else f"毛利率 {stock['margin']:.1f}%"),
     }
     gauge_width = 0 if score is None else int(round(score / 100 * 100))

@@ -91,6 +91,33 @@ def _compute_score(roe: Optional[float], pe: Optional[float], div: Optional[floa
     return total, parts
 
 
+def _compute_score_hk(roe: Optional[float], pe: Optional[float], div: Optional[float],
+                      liab: Optional[float], pos: Optional[float],
+                      margin: Optional[float], pb: Optional[float]):
+    """港股巴菲特评分(0-100)+分项。
+
+    口径对齐外部链接(同账号 app.workbuddy.link 港股页)的保守模型，权重一致：
+    ROE30 / 估值25 / 分红15 / 财务15 / 护城河15。
+    与 A股共用函数 _compute_score 的差异(仅作用于港股 _build_hk_page，A股不受影响)：
+    - 估值：PE 线性分档 24.35-0.67*PE，封顶21(外部链接39样本拟合，低位不再给满25)；
+    - 财务：由「负债率」改为「PB/资产质量」代理 12.2-2.05*PB(对齐外部，对高PB/轻资产更严)；
+    - 分红/ROE 分档整体收紧，贴近外部链接实测分布。
+    护城河沿用毛利率代理(外部用不透明「规模代理」，此处以毛利率作可解释替代，可能差±3分)。
+    模型估算，仅供参考。
+    """
+    def _c(v, lo, hi):
+        return max(lo, min(hi, v))
+
+    parts: Dict[str, int] = {}
+    parts["val"] = _c(round(24.35 - 0.67 * pe), 0, 21) if pe is not None else 10
+    parts["div"] = _c(round(2.6 * div - 0.5), 0, 15) if div is not None else 0
+    parts["fin"] = _c(round(12.2 - 2.05 * pb), 0, 15) if pb is not None else 8
+    parts["roe"] = _c(round(0.91 * roe + 3.8), 0, 30) if roe is not None else 6
+    parts["moat"] = _score_band(margin, [(55, 15), (40, 12), (25, 10), (15, 7)], 4)
+    total = sum(parts.values())
+    return total, parts
+
+
 def _compute_build(price: Optional[float], w52l: Optional[float], w52h: Optional[float],
                   pos: Optional[float], pe: Optional[float], eps: Optional[float],
                   last_div: Optional[float], div_yield: Optional[float]) -> Optional[Dict[str, Any]]:
@@ -501,6 +528,13 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
             if issue_text:
                 stock_issues.append(issue_text)
 
+        score, score_parts = _compute_score_hk(
+            fin_analysis.get("roe") if fin_analysis.get("roe") is not None else fin.get("roe"),
+            fin.get("pe"), fin.get("div"),
+            fin_analysis.get("liab"), hist_stats.get("pos"), fin_analysis.get("margin"),
+            fin.get("pb"),
+        )
+
         stocks.append(
             {
                 **base,
@@ -547,6 +581,8 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
                 "suggest": generated["suggest"],
                 "summary": generated["summary"],
                 "risks": base.get("risks") or generated["risks"],
+                "score": score,
+                "score_parts": score_parts,
                 "data_issues": stock_issues,
             }
         )

@@ -617,14 +617,17 @@ def _fetch_hk_financial_analysis(code: str, trade_date: str) -> Dict[str, Any]:
         df = _safe_ak_call(f"{stock_code} 港股财务分析", analysis_fn, symbol=stock_code)
         if df is None or df.empty:
             return _build_result_payload("东方财富 港股财务分析", trade_date, issue="公开接口返回空数据")
-        row = df.iloc[-1].to_dict()
+        # 按报告期降序取最新一期（东财港股财务分析接口行序不保证最新在末位；report_year 字段不可信，仅取数值用）
+        if "REPORT_DATE" in df.columns:
+            df = df.sort_values("REPORT_DATE", ascending=False)
+        row = df.iloc[0].to_dict()
         report_year = _extract_year_from_row(row, ["REPORT_DATE", "REPORT_YEAR", "REPORT_DATE_NAME", "报告期"])
         return _build_result_payload(
             "东方财富 港股财务分析",
             trade_date,
-            roe=_find_metric_by_any_keywords(row, [["净资产收益率"], ["股东权益回报率"]]),
-            margin=_find_metric_by_any_keywords(row, [["销售毛利率"], ["毛利率"]]),
-            liab=_find_metric_by_any_keywords(row, [["资产负债率"], ["负债率"]]),
+            roe=_to_float(_find_metric_by_any_keywords(row, [["ROE_AVG"], ["ROE_YEARLY"], ["净资产收益率"], ["股东权益回报率"]])),
+            margin=_to_float(_find_metric_by_any_keywords(row, [["GROSS_PROFIT_RATIO"], ["销售毛利率"], ["毛利率"]])),
+            liab=_to_float(_find_metric_by_any_keywords(row, [["DEBT_ASSET_RATIO"], ["资产负债率"], ["负债率"]])),
             report_year=report_year,
         )
 
