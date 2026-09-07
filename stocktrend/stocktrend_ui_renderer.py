@@ -553,7 +553,7 @@ def _render_dividend_panorama(stock: Dict[str, Any], fin3: List[Dict[str, Any]],
 
 def _render_build_module(section_prefix: str, build: Optional[Dict[str, Any]], signal: int,
                         pe: Optional[float] = None, w52l=None, w52h=None, pos=None,
-                        trend: str = "") -> str:
+                        trend: str = "", pb: Optional[float] = None, market: str = "ashare") -> str:
     if not build:
         return f'''<div class="module" id="{section_prefix}-build">
           <h2><span class="num">2</span>买卖决策与建仓</h2>
@@ -569,6 +569,24 @@ def _render_build_module(section_prefix: str, build: Optional[Dict[str, Any]], s
     fair_show = "—" if fair_pe is None else f"{fair_pe} 倍"
     buy_show = "—" if buy_pe is None else f"{buy_pe} 倍（安全边际15%）"
     dist_show = "—" if dist_to_buy is None else f"需再下探约 {dist_to_buy:.1f}%"
+    target_method = build.get("target_method")
+    dist_from_low = build.get("dist_from_low")
+    div_yield = build.get("div_yield")
+    pb_kv = _render_kv("PB（市净率）", f"{pb:.2f}") if (market == "hk" and pb is not None) else ""
+    dist_low_kv = _render_kv("距52周低点", f"+{dist_from_low:.1f}%" if dist_from_low is not None else "—")
+    if target_method == "dividend":
+        target_head = "估值目标价（股息率反推）"
+        target_text = (
+            f"按重仓档目标股息率（约 {div_yield + 3.0:.1f}%）反推，对应建仓价约 "
+            f"<b>{target:.2f}</b> 港元，较现价还需下探约 <b>{dist_to_buy:.1f}%</b>。"
+            f"建议在该价位附近分批建仓。模型估算，仅供参考，非投资建议。"
+        )
+    else:
+        target_head = "估值目标价（PE 视角）"
+        target_text = (
+            f"当前 PE {pe_show}；以合理 PE 中枢 {fair_show} 与每股收益测算，估值目标价约 "
+            f"<b>{('—' if target is None else f'{target:.2f}')}</b> 元。模型估算，请结合自身风险承受力。"
+        )
     if view == "✅ 已处于低估区":
         vcls, vtxt = "ok", "✅ 估值偏低，具备安全边际"
     elif view == "🟡 估值合理":
@@ -597,12 +615,14 @@ def _render_build_module(section_prefix: str, build: Optional[Dict[str, Any]], s
             {_render_kv("52周高点", w52h_text)}
             {_render_kv("当前位置", pos_text)}
             {_render_kv("当前 PE", pe_show)}
+            {pb_kv}
+            {dist_low_kv}
             {_render_kv("合理 PE 中枢", fair_show)}
             {_render_kv("建议买入 PE", buy_show)}
             {_render_kv("距击球区", dist_show)}
           </div>
-          <h3 class="sub-h">估值目标价（PE 视角）</h3>
-          <div class="reason">当前 PE {pe_show}；以合理 PE 中枢 {fair_show} 与每股收益测算，估值目标价约 <b>{("—" if target is None else f"{target:.2f}")}</b> 元。模型估算，请结合自身风险承受力。</div>
+          <h3 class="sub-h">{target_head}</h3>
+          <div class="reason">{target_text}</div>
           <h3 class="sub-h">建议买入价位（三档建仓）</h3>
           <table class="tier-table">
             <thead><tr><th>档位</th><th>对应价</th><th>对应股息率</th></tr></thead>
@@ -767,7 +787,8 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
         </div>
         {_render_build_module(section_prefix, build, signal, _to_float(stock.get("pe")),
                               _to_float(stock.get("w52l")), _to_float(stock.get("w52h")),
-                              stock.get("pos"), stock.get("trend"))}
+                              stock.get("pos"), stock.get("trend"),
+                              _to_float(stock.get("pb")), stock.get("market"))}
         <div class="module" id="{section_prefix}-capital">
           <h2><span class="num">3</span>资金面动态</h2>
           <div class="summary">{stock.get("capital", "资金面描述暂缺")}</div>

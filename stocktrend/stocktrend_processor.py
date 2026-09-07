@@ -133,19 +133,32 @@ def _compute_build(price: Optional[float], w52l: Optional[float], w52h: Optional
     else:
         view = "⚠️ 估值偏高"
     dist = round((price - w52l) / price * 100, 1) if w52l else None
+    dist_from_low = round((price - w52l) / w52l * 100, 1) if w52l else None
     tiers = []
     if w52l:
-        probe = round(price * 0.97, 2)
-        add = round(w52l + (price - w52l) * 0.30, 2)
-        heavy = round(w52l * 1.02, 2)
-        for name, p in (("试探仓", probe), ("加仓", add), ("重仓", heavy)):
-            dy = round(last_div / p * 100, 2) if last_div else None
-            tiers.append({"name": name, "price": p, "dy": dy})
+        if eps:
+            # A股路径：基于 52 周区间比例分档（保留原逻辑）
+            probe = round(price * 0.97, 2)
+            add = round(w52l + (price - w52l) * 0.30, 2)
+            heavy = round(w52l * 1.02, 2)
+            for name, p in (("试探仓", probe), ("加仓", add), ("重仓", heavy)):
+                dy = round(last_div / p * 100, 2) if last_div else None
+                tiers.append({"name": name, "price": p, "dy": dy})
+        elif last_div and div_yield:
+            # 港股路径（无 EPS）：按目标股息率反推三档建仓价，对齐外部链接口径
+            # div_yield 为百分数(如 5.12 表示 5.12%)，反推价 = last_div*100 / 目标股息率(%)
+            probe = round(last_div * 100 / div_yield, 2)                  # 现价档（目标股息率=当前）
+            add = round(last_div * 100 / (div_yield + 1.5), 2)            # 加仓档（+1.5pp）
+            heavy = round(last_div * 100 / (div_yield + 3.0), 2)         # 重仓档（+3.0pp）
+            for name, p in (("试探仓", probe), ("加仓", add), ("重仓", heavy)):
+                dy = round(last_div / p * 100, 2) if last_div else None
+                tiers.append({"name": name, "price": p, "dy": dy})
     target = None
     fair_pe = None
     buy_pe = None
     buy_target = None
     dist_to_buy = None
+    target_method = None
     if pe and pe > 0 and eps:
         if pos is not None and pos <= 40:
             fair_pe = round(pe * 1.15, 1)
@@ -159,15 +172,25 @@ def _compute_build(price: Optional[float], w52l: Optional[float], w52h: Optional
         buy_target = round(buy_pe * eps, 2)
         if price and buy_target:
             dist_to_buy = round((price - buy_target) / price * 100, 1)
+        target_method = "pe"
+    elif last_div and div_yield:
+        # 港股：以重仓档目标股息率反推建仓目标价（无 EPS 时的可解释口径）
+        heavy_dy = div_yield + 3.0
+        target = round(last_div * 100 / heavy_dy, 2)
+        if price and target:
+            dist_to_buy = round((price - target) / price * 100, 1)
+        target_method = "dividend"
     return {
         "view": view,
         "dist": dist,
+        "dist_from_low": dist_from_low,
         "tiers": tiers,
         "target": target,
         "fair_pe": fair_pe,
         "buy_pe": buy_pe,
         "buy_target": buy_target,
         "dist_to_buy": dist_to_buy,
+        "target_method": target_method,
         "div_yield": div_yield,
     }
 
@@ -535,12 +558,22 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
             fin.get("pb"),
         )
 
+        price = _to_float(hist_last.get("收盘")) or _to_float(spot.get("最新价"))
+        hk_div_yield = fin.get("div")
+        # 港股无每股分红字段，由「股息率 × 现价」反推 TTM 每股分红（与外部链接口径一致）
+        hk_last_div = round(hk_div_yield * price / 100, 4) if (hk_div_yield is not None and price) else None
+        build = _compute_build(
+            price, hist_stats.get("w52l"), hist_stats.get("w52h"), hist_stats.get("pos"),
+            fin.get("pe"), None, hk_last_div, hk_div_yield,
+        )
+
         stocks.append(
             {
                 **base,
                 "market": "hk",
                 "exchange": "HK",
-                "price": _to_float(hist_last.get("收盘")) or _to_float(spot.get("最新价")),
+                "build": build,
+                "price": price,
                 "chg": _to_float(hist_last.get("涨跌幅")) if _to_float(hist_last.get("涨跌幅")) is not None else _to_float(spot.get("涨跌幅")),
                 "change": _to_float(hist_last.get("涨跌额")) if _to_float(hist_last.get("涨跌额")) is not None else _to_float(spot.get("涨跌额")),
                 "pe": fin.get("pe"),
