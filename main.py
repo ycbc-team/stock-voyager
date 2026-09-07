@@ -94,7 +94,7 @@ def main() -> Dict:
         "--only",
         choices=["all", "fundflow", "stocktrend"],
         default="all",
-        help="只构建指定页面：fundflow=资金流日报（每日更新）/ stocktrend=两个走势 tab（每周五更新）",
+        help="只构建指定页面：fundflow=资金流日报 / stocktrend=两个走势 tab（默认与资金流同频：每日全量构建，不再单独按周刷新）",
     )
     args = parser.parse_args()
 
