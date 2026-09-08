@@ -594,6 +594,7 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
                 "roe": fin_analysis.get("roe") if fin_analysis.get("roe") is not None else fin.get("roe"),
                 "margin": fin_analysis.get("margin"),
                 "liab": fin_analysis.get("liab"),
+                "fin3_annual": fin_analysis.get("fin3_annual") or [],
                 "financial_report_year": None,  # 港股财务分析源 report_year 不可信(返回2016-2018旧期)，抑制卡片年报文案
                 "financial_source": fin_analysis.get("source") or fin.get("source"),
                 "financial_as_of": fin_analysis.get("as_of") or fin.get("as_of"),

@@ -425,6 +425,7 @@ def _render_fin3_transposed(fin3: List[Dict[str, Any]]) -> str:
 
 
 TREASURY_10Y = 1.68  # 中债10年期国债收益率（东方财富宏观口径，2026-09-01 附近）
+TREASURY_10Y_HK = 4.78  # 美债10年期国债收益率（截至2026-09-07；港币联系汇率下作为港元机会成本代理）
 
 
 def _last_ttm_div(div5: List[Optional[float]]) -> Optional[float]:
@@ -477,7 +478,9 @@ def _compute_dividend_score(div5, div_years, eps_by_year, ocfps_latest, div_ttm_
     return score, stars, n_paid, avg_payout, cov
 
 
-def _render_dividend_panorama(stock: Dict[str, Any], fin3: List[Dict[str, Any]], currency_unit: str) -> str:
+def _render_dividend_panorama(stock: Dict[str, Any], fin3: List[Dict[str, Any]], currency_unit: str,
+                             treasury_10y: float = TREASURY_10Y, treasury_name: str = "中债10年期国债收益率",
+                             treasury_note: str = "东方财富宏观口径，9月1日附近") -> str:
     div5 = stock.get("div5") or []
     div_years = stock.get("div_years") or []
     if not div5 or all(v is None for v in div5):
@@ -556,19 +559,19 @@ def _render_dividend_panorama(stock: Dict[str, Any], fin3: List[Dict[str, Any]],
     else:
         calc_block = '<h3 class="sub-h">10万元分红收益测算</h3>\n      <div class="reason">价格或分红数据暂缺，无法测算。</div>'
 
-    # 股息率 vs 无风险利率
-    spread = (div_yield_ttm - TREASURY_10Y) if div_yield_ttm is not None else None
+    # 股息率 vs 无风险利率（分市场口径：A股=中债10Y，港股=美债10Y）
+    spread = (div_yield_ttm - treasury_10y) if div_yield_ttm is not None else None
     spread_cls = "good" if (spread or 0) > 0 else "bad"
     spread_txt = "—" if spread is None else f"{spread:+.2f}pct"
     rate_block = f'''<h3 class="sub-h">股息率 vs 无风险利率</h3>
       <div class="yield-vs">
         <div class="yv-item"><div class="yv-k">股息率(TTM)</div><div class="yv-v {('good' if div_yield_ttm is not None else '')}">{("—" if div_yield_ttm is None else f"{div_yield_ttm:.2f}%")}</div></div>
-        <div class="yv-item"><div class="yv-k">10Y国债收益率</div><div class="yv-v">{TREASURY_10Y:.2f}%</div></div>
+        <div class="yv-item"><div class="yv-k">10Y国债收益率</div><div class="yv-v">{treasury_10y:.2f}%</div></div>
         <div class="yv-item"><div class="yv-k">利差（性价比）</div><div class="yv-v {spread_cls}">{spread_txt}</div></div>
       </div>
-      <div class="note">无风险利率取中债10年期国债收益率 {TREASURY_10Y:.2f}%（东方财富宏观口径，9月1日附近）。{("利差为正且较大，说明分红性价比相对国债突出。" if (spread or 0) > 0 else "利差为负或持平，分红性价比相对国债不占优。")}</div>'''
+      <div class="note">无风险利率取{treasury_name} {treasury_10y:.2f}%（{treasury_note}）。{("利差为正且较大，说明分红性价比相对国债突出。" if (spread or 0) > 0 else "利差为负或持平，分红性价比相对国债不占优。")}</div>'''
 
-    note = '<div class="note">数据来源：东方财富；分红率 = 每股分红 / 每股收益。每股分红为同年（含中期）分红公告合计；TTM 股息率为「近12个月除权除息日内的每股分红之和 ÷ 收盘价」，与行情软件 TTM 股息率口径一致。</div>'
+    note = '<div class="note">数据来源：东方财富（或 Wind/妙想）分红明细；分红率 = 每股分红 / 每股收益。每股分红为同年（含中期）分红公告合计；TTM 股息率为「近12个月除权除息日内的每股分红之和 ÷ 收盘价」，与行情软件 TTM 股息率口径一致。</div>'
     return table + cov_block + note + score_block + calc_block + rate_block
 
 
@@ -759,8 +762,12 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
         )
     else:
         capital_tags = (
+            f'<span class="tag">现价 {_fmt_price(_to_float(stock.get("price")))} {market_meta["currency_unit"]}</span>'
+            f'<span class="tag">52周 {_fmt_price(_to_float(stock.get("w52l")))}–{_fmt_price(_to_float(stock.get("w52h")))}</span>'
             f'<span class="tag">{market_meta["holding_line"]}</span>'
             f'<span class="tag">{market_meta["holding_shares"]}</span>'
+            f'<span class="tag">换手率 {_fmt_pct(_to_float(stock.get("turn")))}</span>'
+            f'<span class="tag">52周分位 {pos_text}</span>'
             f'<span class="tag">{market_meta["flow_line"]}</span>'
         )
         capital_note = (
@@ -774,6 +781,12 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
             snap_md = f"{int(_m)}月{int(_d)}日"
         except Exception:
             snap_md = ""
+    # 分市场无风险利率：A股=中债10Y，港股=美债10Y（港币联系汇率下港元机会成本代理）
+    _is_hk = (market_code == "hk")
+    _treasury_10y = TREASURY_10Y_HK if _is_hk else TREASURY_10Y
+    _treasury_name = "美债10年期国债收益率" if _is_hk else "中债10年期国债收益率"
+    _treasury_note = ("截至2026-09-07，港币联系汇率下作为港元机会成本代理"
+                      if _is_hk else "东方财富宏观口径，9月1日附近")
     return f'''<div class="modal-overlay">
     <label class="modal-backdrop" for="{modal_id}"></label>
     <div class="modal">
@@ -822,13 +835,15 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
           <h2><span class="num">4</span>盈利质量与排雷</h2>
           <div class="section-hint">近3年盈利与资产质量（年报口径，2023-2025）</div>
           {_render_fin3_transposed(fin3_annual)}
-          <div class="note">数据来源：东方财富 年报口径；制造业中资产负债率 60%-65% 属中等杠杆，ROE 保持在 15% 以上为较优水平。毛利率栏显示"—"表示该行业（银行/保险）不适用毛利率口径。</div>
+          <div class="note">数据来源：东方财富（或 Wind）年报口径；制造业中资产负债率 60%-65% 属中等杠杆，ROE 保持在 15% 以上为较优水平。毛利率栏显示"—"表示该行业（银行/保险）不适用毛利率口径。</div>
           {_render_defense(defense)}
         </div>
         <div class="module" id="{section_prefix}-dividend">
           <h2><span class="num">5</span>分红回报全景</h2>
           <div class="section-hint">近5年现金分红（元/股，含中期，全年合计）</div>
-          {_render_dividend_panorama(stock, fin3_annual, market_meta["currency_unit"])}
+          {_render_dividend_panorama(stock, fin3_annual, market_meta["currency_unit"],
+                                   treasury_10y=_treasury_10y, treasury_name=_treasury_name,
+                                   treasury_note=_treasury_note)}
         </div>
         {_render_score_module(section_prefix, score, score_parts, stock)}
       </div>
