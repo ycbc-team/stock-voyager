@@ -132,8 +132,6 @@ def _compute_build(price: Optional[float], w52l: Optional[float], w52h: Optional
         view = "🟡 估值合理"
     else:
         view = "⚠️ 估值偏高"
-    dist = round((price - w52l) / price * 100, 1) if w52l else None
-    dist_from_low = round((price - w52l) / w52l * 100, 1) if w52l else None
     tiers = []
     if w52l:
         if eps:
@@ -159,16 +157,18 @@ def _compute_build(price: Optional[float], w52l: Optional[float], w52h: Optional
     buy_target = None
     dist_to_buy = None
     target_method = None
-    if pe and pe > 0 and eps:
+    # 合理 PE 中枢 / 建议买入 PE：仅依赖当前 PE 与估值位置分档，
+    # A股(有EPS)与港股(有PE)通用，不再受 eps 缺失限制（港股无每股收益字段，以前因此恒为空）。
+    if pe and pe > 0:
         if pos is not None and pos <= 40:
             fair_pe = round(pe * 1.15, 1)
         elif pos is not None and pos <= 65:
             fair_pe = round(pe * 1.0, 1)
         else:
             fair_pe = round(pe * 0.88, 1)
-        target = round(fair_pe * eps, 2)
-        # 建议买入 PE：在合理中枢基础上再留 15% 安全边际
         buy_pe = round(fair_pe * 0.85, 1)
+    if pe and pe > 0 and eps:
+        target = round(fair_pe * eps, 2)
         buy_target = round(buy_pe * eps, 2)
         if price and buy_target:
             dist_to_buy = round((price - buy_target) / price * 100, 1)
@@ -182,8 +182,6 @@ def _compute_build(price: Optional[float], w52l: Optional[float], w52h: Optional
         target_method = "dividend"
     return {
         "view": view,
-        "dist": dist,
-        "dist_from_low": dist_from_low,
         "tiers": tiers,
         "target": target,
         "fair_pe": fair_pe,
@@ -283,8 +281,8 @@ def _build_signal(pos: Optional[float], pe: Optional[float], div: Optional[float
     return 1
 
 
-def _build_generic_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], main_inflow: Optional[float], north_pct: Optional[float]) -> Dict[str, Any]:
-    signal = _build_signal(pos, pe, None, main_inflow)
+def _build_generic_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], div: Optional[float], main_inflow: Optional[float], north_pct: Optional[float]) -> Dict[str, Any]:
+    signal = _build_signal(pos, pe, div, main_inflow)
     suggest = "可分批关注" if signal == 0 else "持有观察" if signal == 1 else "谨慎观望"
     pe_text = "亏损或暂缺" if pe is None or pe <= 0 else f"PE {pe:.1f}"
     pos_text = "52周位置暂缺" if pos is None else f"52周分位 {pos:.0f}%"
@@ -397,7 +395,7 @@ def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
         fin3 = financial.get("fin3") or []
         fin3_annual = [f for f in fin3 if f.get("annual")]
 
-        generated = _build_generic_texts(meta["zh"], meta["sector"], _to_float(spot.get("市盈率-动态")), hist_stats.get("pos"), flow.get("main_net_in"), north.get("north_pct"))
+        generated = _build_generic_texts(meta["zh"], meta["sector"], _to_float(spot.get("市盈率-动态")), hist_stats.get("pos"), div_yield, flow.get("main_net_in"), north.get("north_pct"))
         score, score_parts = _compute_score(
             financial.get("roe"), _to_float(spot.get("市盈率-动态")), div_yield,
             financial.get("liab"), hist_stats.get("pos"), financial.get("margin"),

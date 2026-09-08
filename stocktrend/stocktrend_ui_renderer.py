@@ -36,6 +36,27 @@ SIGNAL_EMOJI = ["🟢", "🟡", "🔴"]
 SIGNAL_COLOR = ["#3fb950", "#d29922", "#f85149"]
 CONCL_CLASS = ["ok", "mid", "wait"]
 
+# 「是否处于低点（估值视角）」四档结论的依据说明（弹窗模块2，估值目标价上方黑框）
+VIEW_BASIS_NOTE = (
+    '<div class="note">'
+    '「是否处于低点」依据，结合当前股价处于过去52周分位的区间值，和PE进行判断：<br>'
+    '✅已处于低估区——52周分位≤40%且PE≤20；<br>'
+    '🟡估值合理——52周分位≤65%且PE≤30，且不满足上一条；<br>'
+    '⚠️估值偏高——52周分位&gt;65%；或52周分位在41%-65%且PE&gt;30%；或分位≤40%但PE&gt;20；<br>'
+    '⚠️估值暂缺——52周分位数据缺失时无法判断，PE缺失时视为中性，不参与达标判定，看52周分位；'
+    '</div>'
+)
+
+# 「是否推荐入手」三档结论的依据说明（整页底部，免责声明前）
+SIGNAL_BASIS_NOTE = (
+    '<div class="basis-explain">'
+    '卡片「是否推荐入手」依据以下多维打分：当前股价处于过去52周分位的区间值（≤35%+1分，≥75%-1分）、PE（≤20+1分，≥35-1分）、港股/A股股息率≥2.5%+1分，A股主力净流入&gt;0+1分，得出3种结论：<br>'
+    '🟢 可分批关注——≥3分；<br>'
+    '🟡 持有观察——1–2分；<br>'
+    '🔴 谨慎观望——≤0分；'
+    '</div>'
+)
+
 
 def default_input_dir() -> str:
     return default_data_dir()
@@ -570,10 +591,8 @@ def _render_build_module(section_prefix: str, build: Optional[Dict[str, Any]], s
     buy_show = "—" if buy_pe is None else f"{buy_pe} 倍（安全边际15%）"
     dist_show = "—" if dist_to_buy is None else f"需再下探约 {dist_to_buy:.1f}%"
     target_method = build.get("target_method")
-    dist_from_low = build.get("dist_from_low")
     div_yield = build.get("div_yield")
     pb_kv = _render_kv("PB（市净率）", f"{pb:.2f}") if (market == "hk" and pb is not None) else ""
-    dist_low_kv = _render_kv("距52周低点", f"+{dist_from_low:.1f}%" if dist_from_low is not None else "—")
     if target_method == "dividend":
         target_head = "估值目标价（股息率反推）"
         target_text = (
@@ -587,7 +606,9 @@ def _render_build_module(section_prefix: str, build: Optional[Dict[str, Any]], s
             f"当前 PE {pe_show}；以合理 PE 中枢 {fair_show} 与每股收益测算，估值目标价约 "
             f"<b>{('—' if target is None else f'{target:.2f}')}</b> 元。模型估算，请结合自身风险承受力。"
         )
-    if view == "✅ 已处于低估区":
+    if view == "估值位置暂缺":
+        vcls, vtxt = "na", "估值位置暂缺，无法判断"
+    elif view == "✅ 已处于低估区":
         vcls, vtxt = "ok", "✅ 估值偏低，具备安全边际"
     elif view == "🟡 估值合理":
         vcls, vtxt = "mid", "🟡 估值合理，可分批布局"
@@ -616,11 +637,11 @@ def _render_build_module(section_prefix: str, build: Optional[Dict[str, Any]], s
             {_render_kv("当前位置", pos_text)}
             {_render_kv("当前 PE", pe_show)}
             {pb_kv}
-            {dist_low_kv}
             {_render_kv("合理 PE 中枢", fair_show)}
             {_render_kv("建议买入 PE", buy_show)}
             {_render_kv("距击球区", dist_show)}
           </div>
+          {VIEW_BASIS_NOTE}
           <h3 class="sub-h">{target_head}</h3>
           <div class="reason">{target_text}</div>
           <h3 class="sub-h">建议买入价位（三档建仓）</h3>
@@ -902,6 +923,7 @@ def render_page(data: Dict[str, Any]) -> str:
         notes.append(f'<div class="databadge">⚠️ 数据抓取提示：{warning}</div>')
     html.append(
         f'''<div class="page-notes">{''.join(notes)}</div>
+{SIGNAL_BASIS_NOTE}
 <div class="disclaimer"><p>{meta.get("disclaimer", "")}</p></div>
 <div class="footer">{_public_footer(meta)}</div>
 </div>
