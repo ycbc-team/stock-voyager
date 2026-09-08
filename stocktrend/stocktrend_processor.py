@@ -91,6 +91,33 @@ def _compute_score(roe: Optional[float], pe: Optional[float], div: Optional[floa
     return total, parts
 
 
+def _compute_score_hk(roe: Optional[float], pe: Optional[float], div: Optional[float],
+                      liab: Optional[float], pos: Optional[float],
+                      margin: Optional[float], pb: Optional[float]):
+    """港股巴菲特评分(0-100)+分项。
+
+    口径对齐外部链接(同账号 app.workbuddy.link 港股页)的保守模型，权重一致：
+    ROE30 / 估值25 / 分红15 / 财务15 / 护城河15。
+    与 A股共用函数 _compute_score 的差异(仅作用于港股 _build_hk_page，A股不受影响)：
+    - 估值：PE 线性分档 24.35-0.67*PE，封顶21(外部链接39样本拟合，低位不再给满25)；
+    - 财务：由「负债率」改为「PB/资产质量」代理 12.2-2.05*PB(对齐外部，对高PB/轻资产更严)；
+    - 分红/ROE 分档整体收紧，贴近外部链接实测分布。
+    护城河沿用毛利率代理(外部用不透明「规模代理」，此处以毛利率作可解释替代，可能差±3分)。
+    模型估算，仅供参考。
+    """
+    def _c(v, lo, hi):
+        return max(lo, min(hi, v))
+
+    parts: Dict[str, int] = {}
+    parts["val"] = _c(round(24.35 - 0.67 * pe), 0, 21) if pe is not None else 10
+    parts["div"] = _c(round(2.6 * div - 0.5), 0, 15) if div is not None else 0
+    parts["fin"] = _c(round(12.2 - 2.05 * pb), 0, 15) if pb is not None else 8
+    parts["roe"] = _c(round(0.91 * roe + 3.8), 0, 30) if roe is not None else 6
+    parts["moat"] = _score_band(margin, [(55, 15), (40, 12), (25, 10), (15, 7)], 4)
+    total = sum(parts.values())
+    return total, parts
+
+
 def _compute_build(price: Optional[float], w52l: Optional[float], w52h: Optional[float],
                   pos: Optional[float], pe: Optional[float], eps: Optional[float],
                   last_div: Optional[float], div_yield: Optional[float]) -> Optional[Dict[str, Any]]:
@@ -105,42 +132,63 @@ def _compute_build(price: Optional[float], w52l: Optional[float], w52h: Optional
         view = "🟡 估值合理"
     else:
         view = "⚠️ 估值偏高"
-    dist = round((price - w52l) / price * 100, 1) if w52l else None
     tiers = []
     if w52l:
-        probe = round(price * 0.97, 2)
-        add = round(w52l + (price - w52l) * 0.30, 2)
-        heavy = round(w52l * 1.02, 2)
-        for name, p in (("试探仓", probe), ("加仓", add), ("重仓", heavy)):
-            dy = round(last_div / p * 100, 2) if last_div else None
-            tiers.append({"name": name, "price": p, "dy": dy})
+        if eps:
+            # A股路径：基于 52 周区间比例分档（保留原逻辑）
+            probe = round(price * 0.97, 2)
+            add = round(w52l + (price - w52l) * 0.30, 2)
+            heavy = round(w52l * 1.02, 2)
+            for name, p in (("试探仓", probe), ("加仓", add), ("重仓", heavy)):
+                dy = round(last_div / p * 100, 2) if last_div else None
+                tiers.append({"name": name, "price": p, "dy": dy})
+        elif last_div and div_yield:
+            # 港股路径（无 EPS）：按目标股息率反推三档建仓价，对齐外部链接口径
+            # div_yield 为百分数(如 5.12 表示 5.12%)，反推价 = last_div*100 / 目标股息率(%)
+            probe = round(last_div * 100 / div_yield, 2)                  # 现价档（目标股息率=当前）
+            add = round(last_div * 100 / (div_yield + 1.5), 2)            # 加仓档（+1.5pp）
+            heavy = round(last_div * 100 / (div_yield + 3.0), 2)         # 重仓档（+3.0pp）
+            for name, p in (("试探仓", probe), ("加仓", add), ("重仓", heavy)):
+                dy = round(last_div / p * 100, 2) if last_div else None
+                tiers.append({"name": name, "price": p, "dy": dy})
     target = None
     fair_pe = None
     buy_pe = None
     buy_target = None
     dist_to_buy = None
-    if pe and pe > 0 and eps:
+    target_method = None
+    # 合理 PE 中枢 / 建议买入 PE：仅依赖当前 PE 与估值位置分档，
+    # A股(有EPS)与港股(有PE)通用，不再受 eps 缺失限制（港股无每股收益字段，以前因此恒为空）。
+    if pe and pe > 0:
         if pos is not None and pos <= 40:
             fair_pe = round(pe * 1.15, 1)
         elif pos is not None and pos <= 65:
             fair_pe = round(pe * 1.0, 1)
         else:
             fair_pe = round(pe * 0.88, 1)
-        target = round(fair_pe * eps, 2)
-        # 建议买入 PE：在合理中枢基础上再留 15% 安全边际
         buy_pe = round(fair_pe * 0.85, 1)
+    if pe and pe > 0 and eps:
+        target = round(fair_pe * eps, 2)
         buy_target = round(buy_pe * eps, 2)
         if price and buy_target:
             dist_to_buy = round((price - buy_target) / price * 100, 1)
+        target_method = "pe"
+    elif last_div and div_yield:
+        # 港股：以重仓档目标股息率反推建仓目标价（无 EPS 时的可解释口径）
+        heavy_dy = div_yield + 3.0
+        target = round(last_div * 100 / heavy_dy, 2)
+        if price and target:
+            dist_to_buy = round((price - target) / price * 100, 1)
+        target_method = "dividend"
     return {
         "view": view,
-        "dist": dist,
         "tiers": tiers,
         "target": target,
         "fair_pe": fair_pe,
         "buy_pe": buy_pe,
         "buy_target": buy_target,
         "dist_to_buy": dist_to_buy,
+        "target_method": target_method,
         "div_yield": div_yield,
     }
 
@@ -233,8 +281,8 @@ def _build_signal(pos: Optional[float], pe: Optional[float], div: Optional[float
     return 1
 
 
-def _build_generic_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], main_inflow: Optional[float], north_pct: Optional[float]) -> Dict[str, Any]:
-    signal = _build_signal(pos, pe, None, main_inflow)
+def _build_generic_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], div: Optional[float], main_inflow: Optional[float], north_pct: Optional[float]) -> Dict[str, Any]:
+    signal = _build_signal(pos, pe, div, main_inflow)
     suggest = "可分批关注" if signal == 0 else "持有观察" if signal == 1 else "谨慎观望"
     pe_text = "亏损或暂缺" if pe is None or pe <= 0 else f"PE {pe:.1f}"
     pos_text = "52周位置暂缺" if pos is None else f"52周分位 {pos:.0f}%"
@@ -347,7 +395,7 @@ def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
         fin3 = financial.get("fin3") or []
         fin3_annual = [f for f in fin3 if f.get("annual")]
 
-        generated = _build_generic_texts(meta["zh"], meta["sector"], _to_float(spot.get("市盈率-动态")), hist_stats.get("pos"), flow.get("main_net_in"), north.get("north_pct"))
+        generated = _build_generic_texts(meta["zh"], meta["sector"], _to_float(spot.get("市盈率-动态")), hist_stats.get("pos"), div_yield, flow.get("main_net_in"), north.get("north_pct"))
         score, score_parts = _compute_score(
             financial.get("roe"), _to_float(spot.get("市盈率-动态")), div_yield,
             financial.get("liab"), hist_stats.get("pos"), financial.get("margin"),
@@ -501,12 +549,29 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
             if issue_text:
                 stock_issues.append(issue_text)
 
+        score, score_parts = _compute_score_hk(
+            fin_analysis.get("roe") if fin_analysis.get("roe") is not None else fin.get("roe"),
+            fin.get("pe"), fin.get("div"),
+            fin_analysis.get("liab"), hist_stats.get("pos"), fin_analysis.get("margin"),
+            fin.get("pb"),
+        )
+
+        price = _to_float(hist_last.get("收盘")) or _to_float(spot.get("最新价"))
+        hk_div_yield = fin.get("div")
+        # 港股无每股分红字段，由「股息率 × 现价」反推 TTM 每股分红（与外部链接口径一致）
+        hk_last_div = round(hk_div_yield * price / 100, 4) if (hk_div_yield is not None and price) else None
+        build = _compute_build(
+            price, hist_stats.get("w52l"), hist_stats.get("w52h"), hist_stats.get("pos"),
+            fin.get("pe"), None, hk_last_div, hk_div_yield,
+        )
+
         stocks.append(
             {
                 **base,
                 "market": "hk",
                 "exchange": "HK",
-                "price": _to_float(hist_last.get("收盘")) or _to_float(spot.get("最新价")),
+                "build": build,
+                "price": price,
                 "chg": _to_float(hist_last.get("涨跌幅")) if _to_float(hist_last.get("涨跌幅")) is not None else _to_float(spot.get("涨跌幅")),
                 "change": _to_float(hist_last.get("涨跌额")) if _to_float(hist_last.get("涨跌额")) is not None else _to_float(spot.get("涨跌额")),
                 "pe": fin.get("pe"),
@@ -529,6 +594,7 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
                 "roe": fin_analysis.get("roe") if fin_analysis.get("roe") is not None else fin.get("roe"),
                 "margin": fin_analysis.get("margin"),
                 "liab": fin_analysis.get("liab"),
+                "fin3_annual": fin_analysis.get("fin3_annual") or [],
                 "financial_report_year": None,  # 港股财务分析源 report_year 不可信(返回2016-2018旧期)，抑制卡片年报文案
                 "financial_source": fin_analysis.get("source") or fin.get("source"),
                 "financial_as_of": fin_analysis.get("as_of") or fin.get("as_of"),
@@ -547,6 +613,8 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
                 "suggest": generated["suggest"],
                 "summary": generated["summary"],
                 "risks": base.get("risks") or generated["risks"],
+                "score": score,
+                "score_parts": score_parts,
                 "data_issues": stock_issues,
             }
         )
