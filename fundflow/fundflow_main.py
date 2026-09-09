@@ -19,6 +19,7 @@ from common.storage import default_site_dir
 from common.storage import read_json
 from fundflow.fundflow_processor import collect_report_data
 from fundflow.fundflow_processor import collect_report_data_hk
+from fundflow.fundflow_processor import collect_report_data_us
 from fundflow.fundflow_processor import write_report_json
 from fundflow.fundflow_ui_renderer import write_html
 
@@ -32,6 +33,9 @@ def build_fundflow_report(data_date: str | None = None, out_dir: str | None = No
     if market == "hk":
         result = collect_report_data_hk(data_date=data_date, topn=topn, verbose=verbose)
         html_name = "fundflow_hk.html"
+    elif market == "us":
+        result = collect_report_data_us(data_date=data_date, topn=topn, verbose=verbose)
+        html_name = "fundflow_us.html"
     else:
         result = collect_report_data(data_date=data_date, topn=topn, verbose=verbose)
         html_name = "fundflow.html"
@@ -48,7 +52,7 @@ def main() -> Dict:
     parser.add_argument("--date", help="数据日期 YYYY-MM-DD（默认取最近交易日）")
     parser.add_argument("--out", help="页面 JSON 输出目录（默认 <项目根>/build/data）")
     parser.add_argument("--topn", type=int, default=10, help="个股资金流 TOP 数量")
-    parser.add_argument("--market", choices=["ashare", "hk"], default="ashare", help="市场：ashare / hk")
+    parser.add_argument("--market", choices=["ashare", "hk", "us"], default="ashare", help="市场：ashare / hk / us")
     args = parser.parse_args()
 
     written = build_fundflow_report(data_date=args.date, out_dir=args.out, topn=args.topn, verbose=True, market=args.market)

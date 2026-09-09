@@ -12,11 +12,34 @@
     --up-b:#ff8a9a;
     --down:#0ecb81;      /* 跌·绿 */
     --down-b:#5fe3b0;
+    --up-soft:rgba(246,70,93,.85);     /* 资金流入条（涨红口径） */
+    --down-soft:rgba(14,203,129,.85);  /* 资金流出条（跌绿口径） */
+    /* 资金流条（行业净流入/流出）底色，随 market-us 互换 */
+    --bar-in:rgba(246,70,93,.95);       /* 净流入·红（A股/港股口径） */
+    --bar-in-soft:rgba(246,70,93,.25);
+    --bar-out:rgba(14,203,129,.95);     /* 净流出·绿（A股/港股口径） */
+    --bar-out-soft:rgba(14,203,129,.25);
     --cyan:#38bdf8;
     --amber:#fbbf24;
     --violet:#a78bfa;
     --mono:"SF Mono","JetBrains Mono",Consolas,"Courier New",monospace;
     --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  /* 美股页：涨绿跌红（美股惯例），与 A股/港股(涨红跌绿)互换色板。
+     注意：market-us 实际挂在 .site-shell-body 上（非 <body>），故用 .market-us 通用类选择器，
+     确保在 site-shell-body 子树内正确覆盖 :root 的色板变量。 */
+  .market-us{
+    --up:#0ecb81;        /* 涨·绿 */
+    --up-b:#5fe3b0;
+    --down:#f6465d;      /* 跌·红 */
+    --down-b:#ff8a9a;
+    --up-soft:rgba(14,203,129,.85);
+    --down-soft:rgba(246,70,93,.85);
+    /* 资金流条：美股净流入=绿、净流出=红（与 A股/港股互换） */
+    --bar-in:rgba(14,203,129,.95);
+    --bar-in-soft:rgba(14,203,129,.25);
+    --bar-out:rgba(246,70,93,.95);
+    --bar-out-soft:rgba(246,70,93,.25);
   }
   *{margin:0;padding:0;box-sizing:border-box}
   html{scroll-behavior:smooth}
@@ -118,8 +141,8 @@
   .flow-row .fn{font-size:11.5px;color:var(--txt2);text-align:right;padding-right:10px;white-space:nowrap}
   .flow-row .fb{position:relative;height:18px}
   .flow-row .bar{position:absolute;top:0;height:18px;border-radius:3px}
-  .flow-row .bar.in{left:50%;background:linear-gradient(90deg,rgba(246,70,93,.25),rgba(246,70,93,.95));box-shadow:0 0 10px rgba(246,70,93,.25)}
-  .flow-row .bar.out{right:50%;background:linear-gradient(270deg,rgba(14,203,129,.25),rgba(14,203,129,.95));box-shadow:0 0 10px rgba(14,203,129,.25)}
+  .flow-row .bar.in{left:50%;background:linear-gradient(90deg,var(--bar-in-soft),var(--bar-in));box-shadow:0 0 10px var(--bar-in-soft)}
+  .flow-row .bar.out{right:50%;background:linear-gradient(270deg,var(--bar-out-soft),var(--bar-out));box-shadow:0 0 10px var(--bar-out-soft)}
   .flow-row .bar .v{position:absolute;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:11.5px;font-weight:700;white-space:nowrap}
   .flow-row .bar.in .v{left:calc(100% + 7px);color:var(--up-b)}
   .flow-row .bar.out .v{right:calc(100% + 7px);color:var(--down-b)}

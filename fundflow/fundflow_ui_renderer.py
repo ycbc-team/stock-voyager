@@ -133,6 +133,7 @@ def write_html(path, result, market="ashare"):
     """渲染 A股 / 港股 资金流日报。market='ashare' → fundflow.html；'hk' → fundflow_hk.html。"""
     market = market or "ashare"
     is_hk = market == "hk"
+    is_us = market == "us"
     d = result["data_date"]
     wd = _weekday_cn(d)
     css = _load_css(os.path.dirname(os.path.abspath(__file__)))
@@ -140,6 +141,8 @@ def write_html(path, result, market="ashare"):
     sb = result.get("southbound") or {}
     sw = result.get("sw_industry") or []
     hk = result.get("hk_sector") or []
+    us = result.get("us_sector") or []
+    gl = result.get("global_liquidity") or {}
 
     if is_hk:
         page_title = f"stock-voyager · 港股资金流日报 · {d}"
@@ -147,6 +150,12 @@ def write_html(path, result, market="ashare"):
         sub = "收盘快照 · 资金主线 · 南向跟踪 · 行业热力"
         src_line = f'南向成交日 <b>{sb.get("trade_date") or "—"}</b> ｜ 行业数据 {len(hk)} 个二级行业'
         nav_key = "fundflow_hk"
+    elif is_us:
+        page_title = f"stock-voyager · 美股资金流日报 · {d}"
+        h1 = 'stock-voyager · <em>美股资金流日报</em>'
+        sub = "收盘快照 · 资金主线 · GICS 行业 · 全球资金面"
+        src_line = f'GICS 二级行业数据 {len(us)} 个'
+        nav_key = "fundflow_us"
     else:
         page_title = f"stock-voyager · A股资金流日报 · {d}"
         h1 = 'stock-voyager · <em>A股资金流日报</em>'
@@ -158,10 +167,10 @@ def write_html(path, result, market="ashare"):
     S.append(
         f'<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n'
         f'<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f'<meta name="description" content="stock-voyager {"港股" if is_hk else "A股"}资金流日报，覆盖主要指数、行业资金流、{"南向" if is_hk else "北向"}资金、个股资金流排行与热点异动。">\n'
+        f'<meta name="description" content="stock-voyager {"港股" if is_hk else ("美股" if is_us else "A股")}资金流日报，覆盖主要指数、行业资金流、{"南向" if is_hk else ("全球资金面" if is_us else "北向")}资金、个股资金流排行与热点异动。">\n'
         f'<meta name="color-scheme" content="dark">\n'
         f'<title>{page_title}</title>\n<style>\n{css}\n{site_nav_css()}\n</style>\n'
-        f'</head>\n<body class="site-shell-body">\n<div class="wrap">\n'
+        f'</head>\n<body class="site-shell-body{" market-us" if is_us else ""}">\n<div class="wrap">\n'
     )
 
     S.append(
@@ -209,7 +218,7 @@ def write_html(path, result, market="ashare"):
         prev = (x["close"] - x["chg"]) if (x["close"] is not None and x["chg"] is not None) else None
         close_s = f'{x["close"]:,.2f}' if x["close"] is not None else "—"
         prev_s = f"{prev:,.2f}" if prev is not None else "—"
-        code_tag = f'HK{x["code"]}' if is_hk else idx_prefix(x["code"])
+        code_tag = f'HK{x["code"]}' if is_hk else (x["code"].upper() if is_us else idx_prefix(x["code"]))
         idx_rows.append(
             f'      <tr>\n'
             f'        <td>{x["name"]}<div class="code">{code_tag}</div></td>\n'
@@ -292,6 +301,32 @@ def write_html(path, result, market="ashare"):
             up_n = sum(1 for x in hk if (x.get("pct") or 0) > 0)
             dn_n = sum(1 for x in hk if (x.get("pct") or 0) < 0)
             kpis.append(kpi("涨跌行业数", "", f"{up_n}↑ / {dn_n}↓", "up", f"共 {len(hk)} 个行业", "flat", "涨多/跌少", "up"))
+    elif is_us:
+        for nm, pref, glow in (
+            ("标普500", "USINX", "up"),
+            ("纳斯达克指数", "USIXIC", "dn"),
+            ("道琼斯指数", "USDJI", "up"),
+        ):
+            x = idx_by_name.get(nm)
+            if x and x["close"] is not None:
+                pct_s, cls = h_pct(x["pct"])
+                kpis.append(kpi(nm, pref, f'{x["close"]:,.2f}', cls, pct_s, cls, "收盘口径", glow))
+        net_vals = [x["main_net_in"] for x in us if x.get("main_net_in") is not None]
+        if net_vals:
+            total_net = sum(net_vals) / 1e8
+            cls = "up" if total_net >= 0 else "down"
+            kpis.append(kpi("美股行业主力净流入", "", f"{total_net:+.1f}亿", cls, "GICS 二级行业汇总", cls, "涨红/跌绿口径", "up" if total_net >= 0 else "dn"))
+        if br.get("available"):
+            adv = br.get("advance"); dec = br.get("decline"); flat = br.get("flat")
+            bcls = "up" if (adv or 0) >= (dec or 0) else "down"
+            val = f"{adv}↑ / {dec}↓" if adv is not None and dec is not None else "—"
+            total_n = (adv or 0) + (dec or 0) + (flat or 0)
+            sub = f"共 {total_n:,} 只 · 上涨占比 {adv / total_n * 100:.0f}%" if total_n else "—"
+            kpis.append(kpi("美股涨跌家数", "", val, bcls, "全市场推导", "flat", sub, "up" if bcls == "up" else "dn"))
+        elif us:
+            up_n = sum(1 for x in us if (x.get("pct") or 0) > 0)
+            dn_n = sum(1 for x in us if (x.get("pct") or 0) < 0)
+            kpis.append(kpi("涨跌行业数", "", f"{up_n}↑ / {dn_n}↓", "up", f"共 {len(us)} 个行业", "flat", "涨多/跌少", "up"))
     else:
         tm = result.get("two_market") or {}
         sh, sz = tm.get("sh"), tm.get("sz")
@@ -330,11 +365,20 @@ def write_html(path, result, market="ashare"):
     kpi_html = '    <div class="kpis">\n' + "\n".join(kpis) + "\n    </div>\n" if kpis else _empty_body("市场 KPI 数据暂缺。")
     S.append(_panel("核心市场总览", "收盘口径", kpi_html))
 
-    # ── 行业主力净流入（申万一级 / 港股一级，按 market 切换）──
-    sec_list = hk if is_hk else sw
-    sec_label = "港股二级行业主力净流入" if is_hk else "申万一级行业主力净流入"
-    sec_tag = f"{len(sec_list)} 类 · 涨红跌绿" if is_hk else "31 行业 · 涨红跌绿"
-    sec_empty = "港股行业数据暂缺，无法绘制资金流条形。" if is_hk else "申万行业数据暂缺，无法汇总主力资金分布。"
+    # ── 行业主力净流入（申万一级 / 港股一级 / 美股 GICS，按 market 切换）──
+    sec_list = hk if is_hk else (us if is_us else sw)
+    if is_hk:
+        sec_label = "港股二级行业主力净流入"
+        sec_tag = f"{len(sec_list)} 类 · 涨红跌绿"
+        sec_empty = "港股行业数据暂缺，无法绘制资金流条形。"
+    elif is_us:
+        sec_label = "美股 GICS 二级行业主力净流入"
+        sec_tag = f"{len(sec_list)} 类 · 涨绿跌红（美股惯例）"
+        sec_empty = "美股 GICS 二级行业数据暂缺，无法绘制资金流条形。"
+    else:
+        sec_label = "申万一级行业主力净流入"
+        sec_tag = "31 行业 · 涨红跌绿"
+        sec_empty = "申万行业数据暂缺，无法汇总主力资金分布。"
     if sec_list:
         in_sum = sum(h_yi(x["main_net_in"]) for x in sec_list if x.get("main_net_in") and x["main_net_in"] > 0)
         out_sum = sum(h_yi(x["main_net_in"]) for x in sec_list if x.get("main_net_in") and x["main_net_in"] < 0)
@@ -343,8 +387,8 @@ def write_html(path, result, market="ashare"):
         out_p = abs(out_sum) / tot_m * 100 if tot_m else 0
         dist_html = (
             '    <div class="dist">\n    <div class="dist-bar">\n'
-            f'      <div class="seg" style="width:{out_p:.1f}%;background:linear-gradient(90deg,rgba(14,203,129,.55),rgba(14,203,129,.9))" title="流出行业合计 {out_sum:.1f}亿">流出 {out_sum:.1f}亿</div>\n'
-            f'      <div class="seg" style="width:{in_p:.1f}%;background:linear-gradient(90deg,rgba(246,70,93,.6),rgba(246,70,93,.95))" title="流入行业合计 {in_sum:.1f}亿">流入 {in_sum:.1f}亿</div>\n'
+            f'      <div class="seg" style="width:{out_p:.1f}%;background:var(--down-soft)" title="流出行业合计 {out_sum:.1f}亿">流出 {out_sum:.1f}亿</div>\n'
+            f'      <div class="seg" style="width:{in_p:.1f}%;background:var(--up-soft)" title="流入行业合计 {in_sum:.1f}亿">流入 {in_sum:.1f}亿</div>\n'
             f'    </div></div>\n'
         )
         all_sorted = sorted([x for x in sec_list if x.get("main_net_in") is not None], key=lambda z: z["main_net_in"], reverse=True)
@@ -423,6 +467,24 @@ def write_html(path, result, market="ashare"):
         else:
             body = _empty_body(sb.get("source", "南向数据暂缺") + "。")
         S.append(_panel("南向资金跟踪", "成交额 / 占比 / 净买入", body))
+    elif is_us:
+        items = gl.get("items") or []
+        if items:
+            gkpis = []
+            for it in items:
+                pct_s, cls = h_pct(it.get("pct"))
+                price = it.get("price")
+                price_s = f"{price:,.2f}" if price is not None else "—"
+                gkpis.append(
+                    f'      <div class="nkpi"><div class="nl">{it.get("name")}</div><div class="nv {cls}">{price_s}</div><div class="n-sub"><span class="n-chg {cls}">{pct_s}</span></div></div>'
+                )
+            body = (
+                '    <div class="nkpis">\n' + "\n".join(gkpis) + '\n    </div>\n'
+                f'    <div class="n-note">⚠ 美股无北向/南向概念；本模块跟踪外部流动性（VIX / 原油等），不可解析项以「—」表示，不编造北向数据。</div>\n'
+            )
+        else:
+            body = _empty_body((gl.get("source") or "全球资金面数据") + "暂缺。")
+        S.append(_panel("全球资金面跟踪", "VIX / 原油 等外部流动性", body))
     else:
         if nb.get("available"):
             t_r_val = (to_float(nb.get("turnover_ratio")) * 100) if nb.get("turnover_ratio") is not None else 0.0
@@ -481,17 +543,21 @@ def write_html(path, result, market="ashare"):
         body = '    <div class="hot">\n' + hcol("今日热点（涨幅前）", hot, "up-b", "zt") + hcol("今日异动（跌幅前）", weak, "down-b", "dt") + "    </div>\n"
     else:
         body = _empty_body("热点/异动板块数据暂缺。")
-    S.append(_panel("热点与异动板块", ("港股板块涨跌 TOP" if is_hk else "申万行业涨跌 TOP"), body))
+    S.append(_panel("热点与异动板块", ("美股 GICS 二级行业涨跌 TOP" if is_us else ("港股板块涨跌 TOP" if is_hk else "申万行业涨跌 TOP")), body))
 
     foot_source = (
         "南向（港股通）成交额为公开披露项，<b>净买入亦公开披露</b>（与北向不同）。"
         if is_hk else
-        "北向成交额为公开披露项，<b>净买入不披露、不编造</b>。"
+        ("美股无北向/南向概念；本页『全球资金面』模块跟踪外部流动性（VIX / 原油等），不编造北向数据。"
+        if is_us else
+        "北向成交额为公开披露项，<b>净买入不披露、不编造</b>。")
     )
     calib = (
         "涨红跌绿（港股惯例）；成交额/净流入单位为元，展示折算为亿/万亿；板块主力净流入按个股 f62 聚合，涨跌幅为板块内个股简单平均。"
         if is_hk else
-        "涨红跌绿（A股惯例）；成交额/净流入单位为元，展示折算为亿/万亿；行业与个股口径以公开行情数据为准。"
+        ("涨绿跌红（美股惯例）；成交额/净流入单位为元，展示折算为亿/万亿；行业与个股口径以公开行情数据为准。"
+        if is_us else
+        "涨红跌绿（A股惯例）；成交额/净流入单位为元，展示折算为亿/万亿；行业与个股口径以公开行情数据为准。")
     )
     S.append(
         f'''  <div class="foot">
@@ -510,16 +576,18 @@ def write_html(path, result, market="ashare"):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="A股/港股 收盘 HTML 渲染脚本（读取 JSON 中间产物，输出对应 HTML）")
+    ap = argparse.ArgumentParser(description="A股/港股/美股 收盘 HTML 渲染脚本（读取 JSON 中间产物，输出对应 HTML）")
     input_dir = default_input_dir()
     output_dir = default_output_dir()
-    ap.add_argument("--market", choices=["ashare", "hk"], default="ashare", help="市场：ashare=fundflow.html / hk=fundflow_hk.html")
-    ap.add_argument("--input", help="输入 JSON 路径（默认按市场取 fundflow.json / fundflow_hk.json）")
-    ap.add_argument("--output", help="输出 HTML 路径（默认按市场取 fundflow.html / fundflow_hk.html）")
+    ap.add_argument("--market", choices=["ashare", "hk", "us"], default="ashare", help="市场：ashare=fundflow.html / hk=fundflow_hk.html / us=fundflow_us.html")
+    ap.add_argument("--input", help="输入 JSON 路径（默认按市场取 fundflow.json / fundflow_hk.json / fundflow_us.json）")
+    ap.add_argument("--output", help="输出 HTML 路径（默认按市场取 fundflow.html / fundflow_hk.html / fundflow_us.html）")
     args = ap.parse_args()
 
-    input_path = args.input or os.path.join(input_dir, "fundflow_hk.json" if args.market == "hk" else "fundflow.json")
-    output_path = args.output or os.path.join(output_dir, "fundflow_hk.html" if args.market == "hk" else "fundflow.html")
+    json_name = {"hk": "fundflow_hk.json", "us": "fundflow_us.json"}.get(args.market, "fundflow.json")
+    html_name = {"hk": "fundflow_hk.html", "us": "fundflow_us.html"}.get(args.market, "fundflow.html")
+    input_path = args.input or os.path.join(input_dir, json_name)
+    output_path = args.output or os.path.join(output_dir, html_name)
 
     if not os.path.exists(input_path):
         raise SystemExit(f"找不到输入 JSON：{input_path}")

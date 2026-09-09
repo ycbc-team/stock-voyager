@@ -11,6 +11,7 @@ SITE_TABS = [
     {"key": "home", "label": "首页", "href": "index.html"},
     {"key": "fundflow", "label": "A股资金流", "href": "fundflow.html"},
     {"key": "fundflow_hk", "label": "港股资金流", "href": "fundflow_hk.html"},
+    {"key": "fundflow_us", "label": "美股资金流", "href": "fundflow_us.html"},
     {"key": "stocktrend_ashare", "label": "A股走势", "href": "stocktrend_ashare.html"},
     {"key": "stocktrend_hk", "label": "港股走势", "href": "stocktrend_hk.html"},
 ]
@@ -32,7 +33,7 @@ html, body {
   width: min(720px, calc(100vw - 20px));
   z-index: 9999;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
   padding: 10px;
   border-radius: 18px;
@@ -285,7 +286,7 @@ def render_site_index(title: str, subtitle: str, date_text: str, cards: Iterable
       <div class="site-hub-date">{date_text}</div>
       <div class="site-hub-alert"><b>这不是实时行情页面。</b> 当前站点展示的是静态页面与收盘快照，适合盘后复盘、看结构和做清单式跟踪，不展示盘中实时跳动数据。</div>
       <div class="site-hub-grid">{cards}</div>
-      <div class="site-hub-note">建议从“资金流日报”先看当天市场主线，再进入 A 股或港股页面看个股细节，整体更适合盘后复盘和清单式跟踪。</div>
+      <div class="site-hub-note">建议从“资金流日报”先看当天市场主线，再进入 A 股 / 港股 / 美股页面看个股细节，整体更适合盘后复盘和清单式跟踪。</div>
     </section>
   </div>
 </main>

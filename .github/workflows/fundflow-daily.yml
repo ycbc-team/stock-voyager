@@ -35,6 +35,14 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      - name: 缓存 build/cache（跨运行复用，减少重复请求）
+        uses: actions/cache@v4
+        with:
+          path: build/cache
+          key: stockvoyager-cache-${{ github.run_id }}
+          restore-keys: |
+            stockvoyager-cache-
+
       - name: 安装 Python
         uses: actions/setup-python@v5
         with:
@@ -62,6 +70,7 @@ jobs:
           test -f build/site/index.html && echo "✓ 导航首页已生成"
           test -f build/site/fundflow.html && echo "✓ A股资金流日报已生成"
           test -f build/site/fundflow_hk.html && echo "✓ 港股资金流日报已生成"
+          test -f build/site/fundflow_us.html && echo "✓ 美股资金流日报已生成"
           test -f build/site/stocktrend_ashare.html && echo "✓ A股个股走势已生成"
           test -f build/site/stocktrend_hk.html && echo "✓ 港股个股走势已生成"
 
