@@ -53,28 +53,28 @@ def build_site_index(fundflow_result: Dict | None = None, stocktrend_result: Dic
             "description": "看市场强弱、行业热力图、主力净流入、北向成交占比，适合先把握当天全市场主线。",
         },
         {
-            "title": "港股资金流日报",
-            "href": "fundflow_hk.html",
-            "badge": "港股资金",
-            "description": "看恒指/恒科强弱、港股行业主力净流入、南向（港股通）成交额与净买入、个股资金流 TOP。",
-        },
-        {
-            "title": "美股资金流日报",
-            "href": "fundflow_us.html",
-            "badge": "美股资金",
-            "description": "看标普/纳指/道指强弱、GICS 行业主力净流入、全球资金面（VIX/原油等）、个股资金流 TOP；涨绿跌红（美股惯例）。",
-        },
-        {
             "title": "A股个股走势",
             "href": "stocktrend_ashare.html",
             "badge": "A股清单",
             "description": "聚焦 32 只核心 A 股，按收盘口径查看估值、位置、资金面、财务与风险提示。",
         },
         {
+            "title": "港股资金流日报",
+            "href": "fundflow_hk.html",
+            "badge": "港股资金",
+            "description": "看恒指/恒科强弱、港股行业主力净流入、南向（港股通）成交额与净买入、个股资金流 TOP。",
+        },
+        {
             "title": "港股个股走势",
             "href": "stocktrend_hk.html",
             "badge": "港股清单",
             "description": "查看港股代表标的的收盘快照、估值、南向持股和分红信息，适合和 A 股页并列浏览。",
+        },
+        {
+            "title": "美股资金流日报",
+            "href": "fundflow_us.html",
+            "badge": "美股资金",
+            "description": "看标普/纳指/道指强弱、GICS 行业主力净流入、全球资金面（VIX/原油等）、个股资金流 TOP；涨绿跌红（美股惯例）。",
         },
     ]
 

@@ -170,7 +170,7 @@ def write_html(path, result, market="ashare"):
         f'<meta name="description" content="stock-voyager {"港股" if is_hk else ("美股" if is_us else "A股")}资金流日报，覆盖主要指数、行业资金流、{"南向" if is_hk else ("全球资金面" if is_us else "北向")}资金、个股资金流排行与热点异动。">\n'
         f'<meta name="color-scheme" content="dark">\n'
         f'<title>{page_title}</title>\n<style>\n{css}\n{site_nav_css()}\n</style>\n'
-        f'</head>\n<body class="site-shell-body{" market-us" if is_us else ""}">\n<div class="wrap">\n'
+        f'</head>\n<body class="site-shell-body{" market-us" if is_us else ""}">\n{render_site_nav(nav_key)}\n<div class="wrap">\n'
     )
 
     S.append(
@@ -190,9 +190,6 @@ def write_html(path, result, market="ashare"):
   </div>
 '''
     )
-    S.append('  <div class="style-note"><b style="color:var(--amber)">⚠ 非实时页面</b> ｜ 当前仅展示收盘后的静态结果，适合盘后复盘与结构观察，不展示盘中实时跳动数据。</div>\n')
-    for warning in result.get("fetch_warnings") or []:
-        S.append(f'  <div class="style-note"><b style="color:var(--amber)">⚠ 数据抓取提示</b> ｜ {warning}</div>\n')
 
     mv = result.get("market_verdict") or {}
     if mv.get("headline"):
@@ -569,7 +566,14 @@ def write_html(path, result, market="ashare"):
   <div class="disclaimer">本报告由 <a href="https://github.com/ycbc-team/stock-voyager" target="_blank" rel="noopener noreferrer" style="color:var(--amber);font-weight:600;text-decoration:none">stock-voyager</a> 生成 · 仅供研究参考，不构成投资建议</div>
 '''
     )
-    S.append(f"</div>\n{render_site_nav(nav_key)}\n</body>\n</html>\n")
+    alerts_html = (
+        '  <div class="style-note"><b style="color:var(--amber)">⚠ 非实时页面</b> ｜ 当前仅展示收盘后的静态结果，适合盘后复盘与结构观察，不展示盘中实时跳动数据。</div>\n'
+        + "".join(
+            f'  <div class="style-note"><b style="color:var(--amber)">⚠ 数据抓取提示</b> ｜ {w}</div>\n'
+            for w in (result.get("fetch_warnings") or [])
+        )
+    )
+    S.append(f"{alerts_html}</div>\n</body>\n</html>\n")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("".join(S))
