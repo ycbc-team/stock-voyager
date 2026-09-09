@@ -10,9 +10,10 @@ from typing import Iterable, Mapping
 SITE_TABS = [
     {"key": "home", "label": "首页", "href": "index.html"},
     {"key": "fundflow", "label": "A股资金流", "href": "fundflow.html"},
+    {"key": "stocktrend_ashare", "label": "A股个股", "href": "stocktrend_ashare.html"},
     {"key": "fundflow_hk", "label": "港股资金流", "href": "fundflow_hk.html"},
-    {"key": "stocktrend_ashare", "label": "A股走势", "href": "stocktrend_ashare.html"},
-    {"key": "stocktrend_hk", "label": "港股走势", "href": "stocktrend_hk.html"},
+    {"key": "stocktrend_hk", "label": "港股个股", "href": "stocktrend_hk.html"},
+    {"key": "fundflow_us", "label": "美股资金流", "href": "fundflow_us.html"},
 ]
 
 
@@ -23,38 +24,35 @@ html, body {
   padding: 0;
   background: #090c10;
 }
-.site-shell-body { padding-bottom: 92px; }
+.site-shell-body { padding-top: max(0px, env(safe-area-inset-top, 0px)); padding-bottom: 16px; }
 .site-nav {
-  position: fixed;
-  left: 50%;
-  bottom: max(14px, env(safe-area-inset-bottom));
-  transform: translateX(-50%);
-  width: min(720px, calc(100vw - 20px));
+  position: -webkit-sticky;
+  position: sticky;
+  top: max(0px, env(safe-area-inset-top, 0px));
+  left: 0;
+  width: auto;
+  max-width: calc(100vw - 8px);
   z-index: 9999;
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: nowrap;
   gap: 8px;
-  padding: 10px;
+  padding: 10px 14px 10px 0;
   border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(13, 17, 23, 0.88);
   backdrop-filter: blur(16px);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.32);
-  transition: transform .22s ease, opacity .22s ease;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
-.site-nav.is-hidden {
-  transform: translateX(-50%) translateY(calc(100% + 28px));
-  opacity: 0;
-  pointer-events: none;
-}
-.site-nav.is-locked-hidden {
-  transform: translateX(-50%) translateY(calc(100% + 28px));
-  opacity: 0;
-  pointer-events: none;
-}
+.site-nav::-webkit-scrollbar { display: none; }
+.wrap, .container { margin-top: 10px; }
 .site-nav-item {
+  flex: 0 0 auto;
+  white-space: nowrap;
   display: block;
-  padding: 10px 8px;
+  padding: 10px 14px;
   border-radius: 12px;
   text-align: center;
   text-decoration: none;
@@ -74,7 +72,7 @@ html, body {
 }
 .site-hub {
   min-height: 100vh;
-  padding: 28px 16px 108px;
+  padding: 28px 16px 40px;
   background: radial-gradient(circle at top, #1b2230 0%, #0d1117 46%, #090c10 100%);
   color: #c9d1d9;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
@@ -187,53 +185,12 @@ html, body {
   .site-hub-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
-  .site-nav { gap: 5px; padding: 8px; }
-  .site-nav-item { font-size: 11.5px; padding: 10px 4px; }
-  .site-hub { padding: 18px 12px 108px; }
+  .site-nav { gap: 5px; padding: 8px 12px 8px 0; }
+  .site-nav-item { font-size: 11.5px; padding: 10px 12px; }
+  .site-hub { padding: 18px 12px 40px; }
   .site-hub-hero { padding: 20px 18px; border-radius: 18px; }
   .site-hub h1 { font-size: 26px; }
 }
-"""
-
-
-def render_site_nav_script() -> str:
-    return """
-<script>
-(function () {
-  const nav = document.querySelector('.site-nav');
-  if (!nav) return;
-
-  let lastY = window.scrollY || 0;
-  let ticking = false;
-
-  function syncNav() {
-    const currentY = window.scrollY || 0;
-    const viewportBottom = currentY + window.innerHeight;
-    const docHeight = document.documentElement.scrollHeight;
-    const isBottom = viewportBottom >= docHeight - 4;
-    const isNearTop = currentY <= 24;
-    const scrollingDown = currentY > lastY + 8;
-    const scrollingUp = currentY < lastY - 8;
-
-    if (isNearTop || isBottom || scrollingUp) {
-      nav.classList.remove('is-hidden');
-    } else if (scrollingDown) {
-      nav.classList.add('is-hidden');
-    }
-
-    lastY = currentY;
-    ticking = false;
-  }
-
-  window.addEventListener('scroll', function () {
-    if (ticking) return;
-    ticking = true;
-    window.requestAnimationFrame(syncNav);
-  }, { passive: true });
-
-  syncNav();
-})();
-</script>
 """
 
 
@@ -246,7 +203,7 @@ def render_site_nav(active: str) -> str:
         items.append(
             f'<a class="{classes}" href="{escape(tab["href"])}">{escape(tab["label"])}</a>'
         )
-    return '<nav class="site-nav" aria-label="站点导航">' + "".join(items) + "</nav>" + render_site_nav_script()
+    return '<nav class="site-nav" aria-label="站点导航">' + "".join(items) + "</nav>"
 
 
 def render_site_index(title: str, subtitle: str, date_text: str, cards: Iterable[Mapping[str, str]]) -> str:
@@ -285,11 +242,10 @@ def render_site_index(title: str, subtitle: str, date_text: str, cards: Iterable
       <div class="site-hub-date">{date_text}</div>
       <div class="site-hub-alert"><b>这不是实时行情页面。</b> 当前站点展示的是静态页面与收盘快照，适合盘后复盘、看结构和做清单式跟踪，不展示盘中实时跳动数据。</div>
       <div class="site-hub-grid">{cards}</div>
-      <div class="site-hub-note">建议从“资金流日报”先看当天市场主线，再进入 A 股或港股页面看个股细节，整体更适合盘后复盘和清单式跟踪。</div>
+      <div class="site-hub-note">建议从“资金流日报”先看当天市场主线，再进入 A 股 / 港股 / 美股页面看个股细节，整体更适合盘后复盘和清单式跟踪。</div>
     </section>
   </div>
 </main>
-{nav}
 </body>
 </html>
 """.format(
@@ -298,5 +254,4 @@ def render_site_index(title: str, subtitle: str, date_text: str, cards: Iterable
         date_text=escape(date_text),
         cards="".join(card_html),
         css=site_nav_css(),
-        nav=render_site_nav("home"),
     )

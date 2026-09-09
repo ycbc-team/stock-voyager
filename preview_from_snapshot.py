@@ -40,12 +40,12 @@ def _load() -> dict:
 def build_fundflow(data: dict) -> list:
     funds = data.get("funds", {})
     made: list = []
-    for mkt in ("ashare", "hk"):
+    for mkt in ("ashare", "hk", "us"):
         if mkt not in funds:
             continue
         out = os.path.join(PREVIEW, f"fundflow_{mkt}_preview.html")
         try:
-            ff_write_html(out, funds[mkt])
+            ff_write_html(out, funds[mkt], market=mkt)
             made.append(out)
         except Exception as exc:  # noqa: BLE001
             print(f"[!] fundflow {mkt} 预览渲染失败：{exc}\n{traceback.format_exc()}")

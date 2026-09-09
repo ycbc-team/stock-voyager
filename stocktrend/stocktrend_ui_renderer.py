@@ -904,7 +904,7 @@ def render_page(data: Dict[str, Any]) -> str:
     html.append(
         f'<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n'
         f'<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f'<title>{meta["title"]}</title>\n<style>{css}{site_nav_css()}</style>\n</head>\n<body class="site-shell-body">\n<div class="container">\n'
+        f'<title>{meta["title"]}</title>\n<style>{css}{site_nav_css()}</style>\n</head>\n<body class="site-shell-body">\n{render_site_nav(nav_active)}\n<div class="container">\n'
     )
     html.append(
         f'''<div class="header">
@@ -942,7 +942,6 @@ def render_page(data: Dict[str, Any]) -> str:
 <div class="disclaimer"><p>{meta.get("disclaimer", "")}</p></div>
 <div class="footer">{_public_footer(meta)}</div>
 </div>
-{render_site_nav(nav_active)}
 {_render_page_script()}
 </body>
 </html>

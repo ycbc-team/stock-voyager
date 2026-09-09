@@ -3,7 +3,7 @@
 """项目统一真实数据快照：调用各模块真实收盘数据收集函数，汇总写入 build/data/snapshot.json。
 
 覆盖：
-  - fundflow    A股/港股资金流（collect_report_data / collect_report_data_hk）
+  - fundflow    A股/港股/美股资金流（collect_report_data / collect_report_data_hk / collect_report_data_us）
   - stocktrend  A股/港股个股走势（collect_pages）
 
 此文件是预览/开发改页面统一读取的【唯一真实数据源】，无需 mock。
@@ -69,7 +69,7 @@ def main() -> None:
     data: dict = {}
 
     # ---- fundflow：A股 + 港股资金流 ----
-    from fundflow.fundflow_processor import collect_report_data, collect_report_data_hk
+    from fundflow.fundflow_processor import collect_report_data, collect_report_data_hk, collect_report_data_us
 
     ok_a, res_a = _safe("fundflow A股", collect_report_data, data_date, args.topn, True)
     modules["funds_ashare"] = "ok" if ok_a else f"failed: {str(res_a)[:240]}"
@@ -80,6 +80,22 @@ def main() -> None:
     modules["funds_hk"] = "ok" if ok_h else f"failed: {str(res_h)[:240]}"
     if ok_h:
         data.setdefault("funds", {})["hk"] = res_h
+
+    ok_u, res_u = _safe("fundflow 美股", collect_report_data_us, data_date, args.topn, True)
+    modules["funds_us"] = "ok" if ok_u else f"failed: {str(res_u)[:240]}"
+    if ok_u:
+        data.setdefault("funds", {})["us"] = res_u
+    else:
+        # 美股抓取失败：若旧快照已有真实美股资金流，保留之，避免预览断供
+        old_us = {}
+        if os.path.exists(out):
+            try:
+                old_us = json.load(open(out, encoding="utf-8")).get("data", {}).get("funds", {}).get("us") or {}
+            except Exception:
+                old_us = {}
+        if old_us:
+            data.setdefault("funds", {})["us"] = old_us
+            modules["funds_us"] = f"failed→preserved(旧 {_old_date(out)})"
 
     # ---- stocktrend：A股 + 港股个股走势 ----
     # out 路径提前，便于保留旧 stocktrend 真实数据（避免预览断供）

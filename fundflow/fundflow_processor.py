@@ -7,11 +7,13 @@ A股资金流 · 中间数据层（加工 / 装配）
 与 fundflow_data_fetcher.py 严格分层：
 
   - fundflow_data_fetcher.py 只负责「抓取 + 适配器 + 缓存」：
-      发起外部请求，把响应适配成可序列化结构（如 DataFrame → list），
-      并写入 build/cache。不掺杂任何业务加工逻辑。
+      发起外部请求，把响应适配成统一的内联 dict 行结构（如 ETF 过滤、单位换算、
+      字段归一、clist/ulist/kamt/gtimg 解析），并写入 build/cache。
+      不掺杂任何业务加工逻辑（行业/广度/副标等派生计算一律不放这里）。
   - 本模块只负责「加工 / 装配」：
       编排 fetcher 的各路抓取结果，做纯本地计算与业务聚合
-      （申万行业聚合、风格代理、热点/异动、盘面定调、涨停/跌停→申万映射等），
+      （申万行业聚合、风格代理、热点/异动、盘面定调、涨停/跌停→申万映射、
+      涨跌家数推导、指数副标、北向占比等），
       产出 renderer 最终消费的 result 结构。全部为纯计算，不发起任何外部请求。
 """
 from __future__ import annotations
@@ -49,6 +51,11 @@ from fundflow.fundflow_data_fetcher import load_or_fetch_northbound
 from fundflow.fundflow_data_fetcher import load_or_fetch_southbound
 from fundflow.fundflow_data_fetcher import load_or_fetch_stock_fundflow_build
 from fundflow.fundflow_data_fetcher import load_or_fetch_sw_index_spot
+from fundflow.fundflow_data_fetcher import load_or_fetch_us_index_snapshot
+from fundflow.fundflow_data_fetcher import load_or_fetch_us_stock_fundflow
+from fundflow.fundflow_data_fetcher import load_or_fetch_us_global_liquidity
+from fundflow.fundflow_data_fetcher import _us_code_to_sector
+from fundflow.fundflow_data_fetcher import _us_sub_industry_order
 from stocktrend.stocktrend_static_data import HK_BASE_DATA
 
 
@@ -201,6 +208,147 @@ def generate_market_verdict(report_data: Dict[str, Any]) -> Dict[str, Any]:
     return {"headline": headline, "tone": tone, "tone_word": tone_word, "avg_pct": avg_pct}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 纯数据处理工具（从 fundflow_data_fetcher.py 迁来）
+#
+# 分层约定：fetcher 只负责「发起外部请求 + 把响应适配成内联 dict 行结构 + 写缓存」，
+# 不掺杂业务加工；这批函数均为零外部请求、纯本地计算/聚合，统一放在本模块。
+# fetcher 在需要时以「函数内惰性 import」方式回调用它们，避免 fetcher↔processor
+# 顶层循环 import。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_index_note(df, data_date) -> Optional[str]:
+    """指数卡定性副标：均线定位(A) + 区间高低(B)。失败/数据不足返回 None。"""
+    try:
+        if df is None or getattr(df, "empty", True):
+            return None
+        d = df.copy()
+        d["日期"] = d["日期"].astype(str)
+        if data_date:
+            d = d[d["日期"] <= str(data_date)]
+        if d.empty or "收盘" not in d.columns:
+            return None
+        closes = d["收盘"].astype(float)
+        last = float(closes.iloc[-1])
+        ma_parts = []
+        for n in (5, 10, 20):
+            if len(closes) >= n:
+                ma = float(closes.iloc[-n:].mean())
+                if last > ma:
+                    ma_parts.append(n)
+        ma_txt = f"站上{'/'.join(str(p) for p in ma_parts)}日线" if ma_parts else "跌破均线"
+        win = closes.iloc[-20:] if len(closes) >= 20 else closes
+        range_txt = ""
+        if len(win) >= 2:
+            if last >= float(win.max()):
+                range_txt = "创近20日新高"
+            elif last <= float(win.min()):
+                range_txt = "近20日新低"
+        return ma_txt + (f" · {range_txt}" if range_txt else "")
+    except Exception:
+        return None
+
+
+def pool_to_list(df) -> List[Dict[str, Any]]:
+    """将涨停/跌停池 DataFrame 转换为 [{code, name, pct}] 列表（列名兼容中/英写法）。"""
+    if df is None or len(df) == 0:
+        return []
+    cols = list(df.columns)
+    out: List[Dict[str, Any]] = []
+
+    def pick(row, *names):
+        for n in names:
+            if n in cols:
+                return row.get(n)
+        return None
+
+    for _, row in df.iterrows():
+        code = pick(row, "代码", "code")
+        name = pick(row, "名称", "name")
+        pct = to_float(pick(row, "涨跌幅", "pct"))
+        if code is None:
+            continue
+        out.append({"code": str(code), "name": str(name) if name is not None else "", "pct": pct})
+    return out
+
+
+def with_northbound_turnover_ratio(payload: Dict[str, Any], sh_amount: Optional[float], sz_amount: Optional[float]) -> Dict[str, Any]:
+    """北向成交额占两市成交额比例（本地计算，零请求）。"""
+    result = dict(payload or {})
+    total_turnover = to_float(result.get("total_turnover"))
+    two_market_amount = (to_float(sh_amount) or 0) + (to_float(sz_amount) or 0)
+    result["turnover_ratio"] = None
+    if total_turnover and two_market_amount:
+        result["turnover_ratio"] = total_turnover / two_market_amount
+    return result
+
+
+def derive_breadth_from_rows(rows: List[Dict[str, Any]], *, exclude_prefixes: Tuple[str, ...] = ("8", "920")) -> Tuple[int, int, int]:
+    """从个股资金流快照按涨跌幅 pct 推导 涨/跌/平 家数。纯计算，零请求。
+
+    exclude_prefixes：剔除指定前缀的代码（A股剔除北交所 8/920 开头）。美股/港股传空元组。
+    pct 已由 fetcher 归一为数值（float/int），此处直接比较。
+    """
+    adv = dec = fl = 0
+    for r in rows:
+        code = str(r.get("code") or "")
+        if exclude_prefixes and code.startswith(exclude_prefixes):
+            continue
+        pct = r.get("pct")
+        if pct is None:
+            continue
+        if pct > 0:
+            adv += 1
+        elif pct < 0:
+            dec += 1
+        else:
+            fl += 1
+    return adv, dec, fl
+
+
+def compute_prev_total(sh_df, sz_df, data_date) -> Optional[float]:
+    """两市场前一日成交额合计（指数日K 环比用）。纯本地计算，零请求。"""
+    if (
+        sh_df is not None and sz_df is not None
+        and not sh_df.empty and not sz_df.empty
+        and "成交额" in sh_df.columns and "成交额" in sz_df.columns
+    ):
+        sh_df = sh_df.tail(60)
+        sz_df = sz_df.tail(60)
+        sh_mask = sh_df["日期"].astype(str) < data_date
+        sz_mask = sz_df["日期"].astype(str) < data_date
+        if sh_mask.any() and sz_mask.any():
+            return float(sh_df.loc[sh_mask].iloc[-1]["成交额"]) + float(sz_df.loc[sz_mask].iloc[-1]["成交额"])
+    return None
+
+
+def compute_us_market_breadth(stock_rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """美股全市场涨跌家数（由全美股资金流快照按涨跌幅 pct 推导）。
+
+    美股无涨跌停板，limit_up / limit_down 恒为 None；纯本地计算，零请求。
+    """
+    warnings: List[str] = []
+    out: Dict[str, Any] = {
+        "available": False,
+        "advance": None,
+        "decline": None,
+        "flat": None,
+        "limit_up": None,
+        "limit_down": None,
+        "source": "",
+        "warnings": warnings,
+    }
+    if stock_rows:
+        adv, dec, fl = derive_breadth_from_rows(stock_rows, exclude_prefixes=())
+        if adv or dec or fl:
+            out["advance"] = adv
+            out["decline"] = dec
+            out["flat"] = fl
+            out["source"] = "东方财富全美股个股资金流(涨跌幅推导)"
+    out["available"] = out["advance"] is not None
+    return out
+
+
 def enrich_sw_with_limit_stocks(breadth: Dict[str, Any], sw_list: List[Dict[str, Any]], stock_to_industry: Dict[str, str]) -> None:
     """涨停/跌停股 → 申万一级行业 领涨/领跌映射（数据驱动，零编造）。
 
@@ -339,7 +487,12 @@ def collect_report_data(data_date: Optional[str] = None, topn: int = 10, verbose
 
 
 def write_report_json(result: Dict[str, Any], out_dir: Optional[str] = None, market: str = "ashare") -> str:
-    filename = "fundflow_hk.json" if market == "hk" else "fundflow.json"
+    if market == "hk":
+        filename = "fundflow_hk.json"
+    elif market == "us":
+        filename = "fundflow_us.json"
+    else:
+        filename = "fundflow.json"
     if out_dir:
         path = os.path.join(out_dir, filename)
         payload = {
@@ -565,4 +718,195 @@ def collect_report_data_hk(data_date: Optional[str] = None, topn: int = 10, verb
         },
     }
     result["market_verdict"] = generate_hk_verdict(result)
+    return result
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 美股资金流加工 / 装配（镜像 A 股 / 港股 collect_report_data，模块一一对应）
+# ════════════════════════════════════════════════════════════════════════════
+SOURCE_US_SECTOR = "东方财富 m:105+t:1,m:106+t:1 全美股资金流 + ulist 静态 72 只龙头补全 + GICS 二级行业样本聚合"
+
+
+def build_us_sector(stock_rows: List[Dict[str, Any]], code_to_sector: Dict[str, Dict[str, str]]) -> List[Dict[str, Any]]:
+    """按美股 GICS 二级行业聚合个股主力净流入（镜像 港股 build_hk_sector）。
+
+    主力净流入 = 行业内个股 f62 求和；涨跌幅 = 行业内个股简单平均（无市值加权源）。
+    东财美股接口未提供 二级行业字段，故以 common/cache/us_gics_map.json 中 curated sub_industry 静态映射为准。
+    板块内 top3 领涨 / 领跌个股由 members 的 pct 推导，供「热点与异动板块」面板展示。
+    """
+    sums: Dict[str, float] = {}
+    pcts: Dict[str, List[float]] = {}
+    members: Dict[str, List[Dict[str, Any]]] = {}
+    for row in stock_rows:
+        code = str(row.get("code") or "").strip().upper()
+        meta = code_to_sector.get(code)
+        if not meta:
+            continue
+        # 优先按 二级行业聚合；缺失时退回一级 sector（理论上 curated 数据已补齐）
+        sec = meta.get("sub_industry") or meta.get("sector")
+        if not sec:
+            continue
+        sums[sec] = sums.get(sec, 0.0) + (to_float(row.get("main_net_in")) or 0.0)
+        pct = to_float(row.get("pct"))
+        if pct is not None:
+            pcts.setdefault(sec, []).append(pct)
+        members.setdefault(sec, []).append(
+            {"name": meta.get("zh") or row.get("name"), "code": code, "pct": pct, "main_net_in": to_float(row.get("main_net_in"))}
+        )
+    out: List[Dict[str, Any]] = []
+    for key in _us_sub_industry_order():
+        if not members.get(key):
+            continue
+        sec_members = members.get(key, [])
+        sec_pcts = pcts.get(key, [])
+        avg_pct = sum(sec_pcts) / len(sec_pcts) if sec_pcts else None
+        with_pct = [m for m in sec_members if m.get("pct") is not None]
+        zt = sorted(with_pct, key=lambda m: m["pct"], reverse=True)[:3]
+        dt = sorted(with_pct, key=lambda m: m["pct"])[:3]
+        out.append(
+            {
+                "key": key,
+                "name": key,
+                "pct": avg_pct,
+                "main_net_in": sums.get(key),
+                "members": sec_members,
+                "zt": zt,
+                "dt": dt,
+                "source": SOURCE_US_SECTOR,
+            }
+        )
+    return out
+
+
+def compute_us_hotspots(us_sector: List[Dict[str, Any]], topn: int = 5) -> Dict[str, List[Dict[str, Any]]]:
+    valid = [row for row in us_sector if to_float(row["pct"]) is not None]
+    valid.sort(key=lambda row: row["pct"], reverse=True)
+    return {"hot": valid[:topn], "weak": valid[-topn:][::-1]}
+
+
+def generate_us_verdict(report_data: Dict[str, Any]) -> Dict[str, Any]:
+    """根据已抓取的美股收盘数据，规则化生成一句话『盘面定调』（纯数据驱动）。"""
+    indices = report_data.get("indices") or []
+    us = report_data.get("us_sector") or []
+    macro = report_data.get("global_liquidity") or {}
+
+    core_names = ("标普500", "纳斯达克指数", "道琼斯指数")
+    core_pcts = [x["pct"] for x in indices if x.get("name") in core_names and x.get("pct") is not None]
+    avg_pct = (sum(core_pcts) / len(core_pcts)) if core_pcts else None
+
+    us_sorted = sorted(us, key=lambda x: (x.get("pct") or 0))
+    lead = us_sorted[-1] if us_sorted else None
+    weak = us_sorted[0] if us_sorted else None
+
+    us_net = sorted([x for x in us if x.get("main_net_in") is not None], key=lambda x: x["main_net_in"], reverse=True)
+    top_net = us_net[:2] if us_net else []
+
+    vix = None
+    for it in macro.get("items") or []:
+        if it.get("name") == "恐慌指数VIX":
+            vix = it.get("pct")
+
+    clauses = []
+    if lead and lead.get("pct") is not None:
+        lt = lead["pct"]
+        verb = "领涨" if lt >= 0 else "相对抗跌"
+        clauses.append(f"{lead['name']}（{lt:+.2f}%）{verb}")
+    if top_net:
+        net_names = "、".join(x["name"] for x in top_net)
+        clauses.append(f"{net_names}主力净流入居前")
+    if weak and weak is not lead and (weak.get("pct") or 0) < 0:
+        clauses.append(f"{weak['name']}（{weak['pct']:+.2f}%）承压")
+    if vix is not None:
+        clauses.append(f"VIX {vix:+.2f}")
+
+    part1 = "，".join(clauses)
+
+    if avg_pct is not None:
+        if avg_pct > 0:
+            idx_txt = f"主要指数收涨 {avg_pct:+.2f}%"
+        elif avg_pct < 0:
+            idx_txt = f"主要指数收跌 {avg_pct:+.2f}%"
+        else:
+            idx_txt = "主要指数持平"
+    else:
+        idx_txt = "主要指数数据暂缺"
+
+    if avg_pct is None:
+        tone, tone_word = "flat", "方向不明"
+    elif avg_pct > 0.15:
+        tone, tone_word = "up", "偏强"
+    elif avg_pct < -0.15:
+        tone, tone_word = "down", "偏弱"
+    else:
+        tone, tone_word = "flat", "震荡"
+
+    if part1:
+        headline = f"{part1}；{idx_txt}，整体{tone_word}。"
+    elif avg_pct is not None:
+        headline = f"{idx_txt}，整体{tone_word}。"
+    else:
+        headline = "当日数据暂缺，无法生成盘面定调。"
+
+    return {"headline": headline, "tone": tone, "tone_word": tone_word, "avg_pct": avg_pct}
+
+
+def collect_report_data_us(data_date: Optional[str] = None, topn: int = 10, verbose: bool = True) -> Dict[str, Any]:
+    reset_request_count()
+    resolved_date = data_date or detect_trade_date("ashare")
+    fetch_warnings: List[str] = []
+    if verbose:
+        print(f"[*] 美股数据日期: {resolved_date}")
+
+    idx_snapshot = load_or_fetch_us_index_snapshot(resolved_date)
+    indices = idx_snapshot.get("indices") or []
+    idx_source = idx_snapshot.get("source") or SOURCE_GT_US
+    if verbose:
+        print(f"[+] 美股指数 {len(indices)} 条（{idx_source}）")
+
+    stock_rows, stock_source = load_or_fetch_us_stock_fundflow(resolved_date, scope="full")
+    if verbose:
+        print(f"[+] 美股个股资金流: {len(stock_rows)} 条（{stock_source}）")
+
+    code_to_sector = _us_code_to_sector()
+    us_sector = build_us_sector(stock_rows, code_to_sector)
+    if verbose:
+        print(f"[+] 美股 GICS 行业聚合: {len(us_sector)} 个行业（{SOURCE_US_SECTOR}）")
+
+    breadth = compute_us_market_breadth(stock_rows)
+    if verbose:
+        print(f"[+] 美股涨跌家数: {'可用' if breadth['available'] else '暂不可用'}（{breadth['source'] or '—'}）")
+    for w in breadth.get("warnings", []):
+        fetch_warnings.append(w)
+
+    global_liquidity = load_or_fetch_us_global_liquidity(resolved_date)
+    if verbose:
+        print(f"[+] 全球资金面: {len(global_liquidity.get('items') or [])} 项（{global_liquidity.get('source')}）")
+
+    top_in, top_out, stock_top_source = fetch_stock_fundflow_top(topn, stock_rows=stock_rows, stock_source=stock_source)
+    hotspots = compute_us_hotspots(us_sector)
+
+    overall_source = SOURCE_US_SECTOR if (us_sector or top_in) else "腾讯gtimg(指数)+东方财富(受限)"
+    result = {
+        "data_date": resolved_date,
+        "source": overall_source,
+        "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "note_global": "美股无『北向/南向』概念；本页『全球资金面』模块为美股外部流动性等价跟踪（VIX / 原油等），不编造北向数据。",
+        "indices": indices,
+        "us_sector": us_sector,
+        "us_sector_source": SOURCE_US_SECTOR,
+        "global_liquidity": global_liquidity,
+        "breadth": breadth,
+        "stock_top_in": top_in,
+        "stock_top_out": top_out,
+        "stock_source": stock_top_source,
+        "hotspots": hotspots,
+        "request_count": get_request_count(),
+        "fetch_warnings": _dedupe_texts(fetch_warnings),
+        "artifacts": {
+            "us_index": _build_filename("fundflow_us_index", resolved_date),
+            "stock_fundflow": f"stock_fundflow_us_today_full_{resolved_date}.json",
+            "global_liquidity": _build_filename("fundflow_us_global", resolved_date),
+        },
+    }
+    result["market_verdict"] = generate_us_verdict(result)
     return result

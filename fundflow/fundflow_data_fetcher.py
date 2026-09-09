@@ -1,13 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-A股收盘数据生产脚本
-===================
+fundflow_data_fetcher.py —— 仅负责「发起外部请求」
+=================================================
 
-职责：
-  1. 抓取 A 股收盘核心数据
-  2. 每个请求模块单独写出 JSON 到 build/cache/
-  3. 汇总生成 build/data/fundflow.json
+⚠️ 硬性边界（违反即 bug，tests/test_layer_boundary.py 会拦截）：
+  本文件【只】做三件事：
+    1. 发起外部请求（AKShare / 东方财富 push2 / 腾讯 gtimg）；
+    2. 把响应适配成可序列化结构（dict / list / DataFrame）；
+    3. 写入 build/cache（经由 common/storage 层）。
+  【绝不】在此做纯本地业务加工：聚合、涨跌家数推导、指数副标、
+  涨停/跌停池转 list、北向占比、环比计算等 —— 这些一律放
+  fundflow_processor.py。
+
+写新函数前先问自己（判断标准）：
+  - 这个函数最终会不会调到 http_get / em_get / call_akshare / get_akshare？
+        → 会：属于 fetcher，留这里。
+        → 不会（纯内存计算）：它是【处理函数】，必须放进 fundflow_processor.py。
+  - 已迁出、若在本文件再出现同名即违规的函数：
+        compute_index_note / pool_to_list / with_northbound_turnover_ratio /
+        compute_us_market_breadth / derive_breadth_from_rows / compute_prev_total
+
+历史教训（2026-09-09）：美股 fetch_us_market_breadth 与遗留的
+_compute_index_note / _pool_to_list / _with_northbound_turnover_ratio 曾错误
+落在 fetcher（规则只在文档、无机器校验所致）。现已迁入 processor 并加边界测试兜底。
 """
 from __future__ import annotations
 
@@ -16,6 +32,7 @@ import datetime
 import json
 import os
 import sys
+import time
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -122,37 +139,6 @@ def _load_or_fetch_build(filename: str, loader):
     save_build_json(filename, payload)
     return payload
 
-def _compute_index_note(df, data_date) -> Optional[str]:
-    """指数卡定性副标：均线定位(A) + 区间高低(B)。失败/数据不足返回 None。"""
-    try:
-        if df is None or getattr(df, "empty", True):
-            return None
-        d = df.copy()
-        d["日期"] = d["日期"].astype(str)
-        if data_date:
-            d = d[d["日期"] <= str(data_date)]
-        if d.empty or "收盘" not in d.columns:
-            return None
-        closes = d["收盘"].astype(float)
-        last = float(closes.iloc[-1])
-        ma_parts = []
-        for n in (5, 10, 20):
-            if len(closes) >= n:
-                ma = float(closes.iloc[-n:].mean())
-                if last > ma:
-                    ma_parts.append(n)
-        ma_txt = f"站上{'/'.join(str(p) for p in ma_parts)}日线" if ma_parts else "跌破均线"
-        win = closes.iloc[-20:] if len(closes) >= 20 else closes
-        range_txt = ""
-        if len(win) >= 2:
-            if last >= float(win.max()):
-                range_txt = "创近20日新高"
-            elif last <= float(win.min()):
-                range_txt = "近20日新低"
-        return ma_txt + (f" · {range_txt}" if range_txt else "")
-    except Exception:
-        return None
-
 def _fetch_market_snapshot_payload(data_date: Optional[str] = None) -> Dict[str, Any]:
     indices: List[Dict[str, Any]] = []
     style_indices: List[Dict[str, Any]] = []
@@ -223,19 +209,8 @@ def _fetch_market_snapshot_payload(data_date: Optional[str] = None) -> Dict[str,
                     index_daily[_nm] = None
         except Exception:
             index_daily = {}
-        sh_df = index_daily.get("上证指数")
-        sz_df = index_daily.get("深证成指")
-        if (
-            sh_df is not None and sz_df is not None
-            and not sh_df.empty and not sz_df.empty
-            and "成交额" in sh_df.columns and "成交额" in sz_df.columns
-        ):
-            sh_df = sh_df.tail(60)
-            sz_df = sz_df.tail(60)
-            sh_mask = sh_df["日期"].astype(str) < data_date
-            sz_mask = sz_df["日期"].astype(str) < data_date
-            if sh_mask.any() and sz_mask.any():
-                prev_total = float(sh_df.loc[sh_mask].iloc[-1]["成交额"]) + float(sz_df.loc[sz_mask].iloc[-1]["成交额"])
+        from fundflow.fundflow_processor import compute_prev_total
+        prev_total = compute_prev_total(index_daily.get("上证指数"), index_daily.get("深证成指"), data_date)
 
     if not indices:
         source = SOURCE_GT
@@ -273,9 +248,10 @@ def _fetch_market_snapshot_payload(data_date: Optional[str] = None) -> Dict[str,
                 )
 
     # 指数卡定性副标：均线定位(A)+区间高低(B)，缺失时渲染层显示『—』
+    from fundflow.fundflow_processor import compute_index_note
     for _x in indices:
         _df = index_daily.get(_x.get("name"))
-        _x["idx_note"] = _compute_index_note(_df, data_date) if _df is not None else None
+        _x["idx_note"] = compute_index_note(_df, data_date) if _df is not None else None
 
     return {
         "indices": indices,
@@ -518,40 +494,10 @@ def _fetch_northbound_payload(sh_amount: Optional[float], sz_amount: Optional[fl
     result["source"] = "东方财富 kamt/数据中心接口均不可用（被限流或未披露；不编造净买入）"
     return result
 
-def _with_northbound_turnover_ratio(payload: Dict[str, Any], sh_amount: Optional[float], sz_amount: Optional[float]) -> Dict[str, Any]:
-    result = dict(payload or {})
-    total_turnover = to_float(result.get("total_turnover"))
-    two_market_amount = (to_float(sh_amount) or 0) + (to_float(sz_amount) or 0)
-    result["turnover_ratio"] = None
-    if total_turnover and two_market_amount:
-        result["turnover_ratio"] = total_turnover / two_market_amount
-    return result
-
 def load_or_fetch_northbound(data_date: str, sh_amount: Optional[float], sz_amount: Optional[float]) -> Dict[str, Any]:
     payload = _load_or_fetch_build(_build_filename("fundflow_northbound", data_date), lambda: _fetch_northbound_payload(sh_amount, sz_amount))
-    return _with_northbound_turnover_ratio(payload, sh_amount, sz_amount)
-
-def _pool_to_list(df) -> List[Dict[str, Any]]:
-    """将涨停/跌停池 DataFrame 转换为 [{code, name, pct}] 列表（列名兼容中/英写法）。"""
-    if df is None or len(df) == 0:
-        return []
-    cols = list(df.columns)
-    out: List[Dict[str, Any]] = []
-
-    def pick(row, *names):
-        for n in names:
-            if n in cols:
-                return row.get(n)
-        return None
-
-    for _, row in df.iterrows():
-        code = pick(row, "代码", "code")
-        name = pick(row, "名称", "name")
-        pct = to_float(pick(row, "涨跌幅", "pct"))
-        if code is None:
-            continue
-        out.append({"code": str(code), "name": str(name) if name is not None else "", "pct": pct})
-    return out
+    from fundflow.fundflow_processor import with_northbound_turnover_ratio
+    return with_northbound_turnover_ratio(payload, sh_amount, sz_amount)
 
 def fetch_market_breadth(data_date: str, stock_rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """抓取全市场个股涨跌家数 + 涨停/跌停数量（AKShare 东方财富源）。
@@ -563,6 +509,7 @@ def fetch_market_breadth(data_date: str, stock_rows: Optional[List[Dict[str, Any
     在当前环境被代理拦截取不到，则复用已抓取的全市场个股资金流快照（stock_rows，
     走 push2delay.eastmoney.com，沙箱可用）按涨跌幅推导涨跌家数，确保收盘广度不空缺。
     """
+    from fundflow.fundflow_processor import pool_to_list
     ak = get_akshare()
     warnings: List[str] = []
     out: Dict[str, Any] = {
@@ -585,8 +532,8 @@ def fetch_market_breadth(data_date: str, stock_rows: Optional[List[Dict[str, Any
         dt = call_akshare_with_retry("跌停池", ak.stock_zt_pool_dtgc_em, date=yyyymmdd)
         out["limit_up"] = int(len(zt)) if zt is not None else None
         out["limit_down"] = int(len(dt)) if dt is not None else None
-        out["zt_list"] = _pool_to_list(zt)
-        out["dt_list"] = _pool_to_list(dt)
+        out["zt_list"] = pool_to_list(zt)
+        out["dt_list"] = pool_to_list(dt)
     except Exception as e:  # noqa: BLE001
         warnings.append(f"涨停/跌停池获取失败: {e}")
 
@@ -608,20 +555,8 @@ def fetch_market_breadth(data_date: str, stock_rows: Optional[List[Dict[str, Any
     # 3) 兜底：AKShare 全市场快照不可用（如沙箱代理拦截 82.push2）时，
     #    复用已抓取的全市场个股资金流快照（stock_rows，走 push2delay，沙箱可用）按涨跌幅推导。
     if out["advance"] is None and stock_rows:
-        adv = dec = fl = 0
-        for r in stock_rows:
-            code = str(r.get("code") or "").zfill(6)
-            if code.startswith(("8", "920")):  # 剔除北交所，与上方口径一致
-                continue
-            pct = to_float(r.get("pct"))
-            if pct is None:
-                continue
-            if pct > 0:
-                adv += 1
-            elif pct < 0:
-                dec += 1
-            else:
-                fl += 1
+        from fundflow.fundflow_processor import derive_breadth_from_rows
+        adv, dec, fl = derive_breadth_from_rows(stock_rows)
         if adv or dec or fl:
             out["advance"] = adv
             out["decline"] = dec
@@ -970,19 +905,10 @@ def fetch_hk_market_breadth(data_date: str, stock_rows: Optional[List[Dict[str, 
     # 优先用全市场正股行情快照（翻页拉 t:3 全量，约 2600 只，走 push2delay）推涨跌家数；
     # 若全量也失败，退回已抓的个股资金流快照子集（样本内，约 213 只）。
     if out["advance"] is None:
+        from fundflow.fundflow_processor import derive_breadth_from_rows
         full = _fetch_hk_full_quote()
         if full:
-            adv = dec = fl = 0
-            for r in full:
-                pct = to_float(r.get("pct"))
-                if pct is None:
-                    continue
-                if pct > 0:
-                    adv += 1
-                elif pct < 0:
-                    dec += 1
-                else:
-                    fl += 1
+            adv, dec, fl = derive_breadth_from_rows(full, exclude_prefixes=())
             if adv or dec or fl:
                 out["advance"] = adv
                 out["decline"] = dec
@@ -990,17 +916,7 @@ def fetch_hk_market_breadth(data_date: str, stock_rows: Optional[List[Dict[str, 
                 out["source"] = out["source"] or "东方财富全市场港股行情(涨跌幅推导)"
                 warnings.append("港股全市场涨跌家数：stock_hk_spot_em 不可用，已用全市场港股正股行情快照涨跌幅推导（全量约 2600 只）。")
         elif stock_rows:
-            adv = dec = fl = 0
-            for r in stock_rows:
-                pct = to_float(r.get("pct"))
-                if pct is None:
-                    continue
-                if pct > 0:
-                    adv += 1
-                elif pct < 0:
-                    dec += 1
-                else:
-                    fl += 1
+            adv, dec, fl = derive_breadth_from_rows(stock_rows, exclude_prefixes=())
             if adv or dec or fl:
                 out["advance"] = adv
                 out["decline"] = dec
@@ -1011,4 +927,336 @@ def fetch_hk_market_breadth(data_date: str, stock_rows: Optional[List[Dict[str, 
 
     out["available"] = any(v is not None for v in (out["advance"], out["total_turnover"]))
     return out
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 美股资金流抓取（镜像 A 股 / 港股，数据展示模块一一对应）
+#  - 主要指数        → 腾讯 gtimg（usINX 标普500 / usIXIC 纳斯达克 / usDJI 道琼斯 / usVIX 恐慌指数）
+#  - 个股主力净流入  → 东方财富 push2delay clist（fs=m:105+t:1，全美股排行，约 3500+ 只）
+#  - 美股 GICS 行业  → 复用 common/cache/us_gics_map.json 静态分类（镜像港股 HK_BASE_DATA 思路），由全美股资金流聚合
+#  - 全球资金面      → 腾讯 gtimg（usVIX 恐慌指数 / usCL WTI 原油；其余宏观序列 gtimg 无则优雅降级）
+#
+# 注意：东方财富美股 clist 在 fltt=2 下 f3 已是「真实涨跌幅百分数」（如 6.1 = +6.1%），
+#       与港股代码里 f3/100 的处理不同；美股直接采用 f3，不再除 100。
+# ════════════════════════════════════════════════════════════════════════════
+SOURCE_GT_US = "腾讯财经 gtimg 接口（美股）"
+SOURCE_EM_US = "东方财富 East Money 公开行情接口（美股 m:105+t:1,m:106+t:1）"
+# m:105+t:1 ≈ NASDAQ 类（约 3500 只），m:106+t:1 ≈ NYSE（约 1700 只），合并后约 5300 只普通股。
+# ETF / 非股票品种 f100='-'，解析层额外过滤兜底。
+EM_US_FS = "m:105+t:1,m:106+t:1"
+EM_US_HEADERS = EM_HK_HEADERS  # 与港股同款 EastMoney 头
+EM_US_CLIST_UT = "bd1d9ddb04089700cf9c27f6f7426281"  # 与港股 clist 同款 ut（已验证可用）
+GTIMG_HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}  # 与港股 gtimg 同款头
+
+# 美股主要指数（gtimg 符号 → 展示名）。以 gtimg 返回的 code 字段（如 ".INX"）做匹配，避免中文名漂移。
+US_INDICES = [
+    ("标普500", ".INX", "usINX"),
+    ("纳斯达克指数", ".IXIC", "usIXIC"),
+    ("道琼斯指数", ".DJI", "usDJI"),
+    ("恐慌指数VIX", ".VIX", "usVIX"),
+]
+
+# 全球资金面 / 外部流动性（美股北向的等价模块）。可解析的展示，不可解析的优雅降级为「—」。
+US_MACRO = [
+    ("恐慌指数VIX", "usVIX"),
+    ("WTI原油", "usOIL"),   # usOIL = iPath 标普高盛原油 ETN，跟踪 WTI 原油
+    ("现货黄金", "usGLD"),   # usGLD = SPDR 黄金 ETF，跟踪现货黄金
+    ("美元指数", "usUUP"),   # usUUP = Invesco 美元指数 ETF（兑一篮子货币）
+]
+
+# 美股 GICS 行业静态映射表（镜像港股 HK_BASE_DATA 思路）。
+# 数据来源：common/cache/us_gics_map.json（已入库、git 跟踪、零运行时网络依赖）。
+# 该表是「行业主力净流入」面板聚合与展示的唯一数据源，按 sub_industry（二级行业）汇总。
+# 东财美股接口未提供 二级行业字段，故以静态映射补齐；新增标的只需在 us_gics_map.json 追加一行，
+# ulist 补全覆盖与二级行业聚合均直接读取本表（运行时不再依赖此处的内联常量）。
+_US_GICS_MAP_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_us_gics_map() -> Dict[str, Any]:
+    """读取 common/cache/us_gics_map.json（美股 curated 标的 GICS 一级/二级行业静态表）。
+
+    文件随仓库入库，运行时无需联网；缺失时优雅降级为空白表（面板退化为东财一级行业 f100）。
+    """
+    global _US_GICS_MAP_CACHE
+    if _US_GICS_MAP_CACHE is not None:
+        return _US_GICS_MAP_CACHE
+    data = load_cache_json("us_gics_map.json")
+    if not isinstance(data, dict) or not data.get("stocks"):
+        _US_GICS_MAP_CACHE = {"stocks": []}
+        return _US_GICS_MAP_CACHE
+    _US_GICS_MAP_CACHE = data
+    return _US_GICS_MAP_CACHE
+
+
+def _us_universe_codes() -> List[str]:
+    return [str(s["code"]).upper() for s in _load_us_gics_map().get("stocks", [])]
+
+
+def _us_code_to_sector() -> Dict[str, Dict[str, str]]:
+    mapping: Dict[str, Dict[str, str]] = {}
+    for s in _load_us_gics_map().get("stocks", []):
+        code = str(s["code"]).upper()
+        mapping[code] = {
+            "sector": s.get("sector", ""),
+            "sub_industry": s.get("sub_industry", ""),
+            "zh": s.get("zh", ""),
+        }
+    return mapping
+
+
+def _us_sector_order() -> List[str]:
+    seen: List[str] = []
+    for s in _load_us_gics_map().get("stocks", []):
+        sec = s.get("sector", "")
+        if sec and sec not in seen:
+            seen.append(sec)
+    return seen
+
+
+def _us_sub_industry_order() -> List[str]:
+    """按 us_gics_map.json 出现顺序排列的二级行业列表（用于稳定展示顺序，渲染层会再按资金流重排）。"""
+    seen: List[str] = []
+    for s in _load_us_gics_map().get("stocks", []):
+        sub = s.get("sub_industry", "")
+        if sub and sub not in seen:
+            seen.append(sub)
+    return seen
+
+
+def _fetch_us_index_snapshot_payload() -> Dict[str, Any]:
+    want = {gt: disp for disp, code, gt in US_INDICES}
+    codes = ",".join(gt for _, code, gt in US_INDICES)
+    text = http_get(f"https://qt.gtimg.cn/q={codes}", GTIMG_HEADERS, timeout=15, retries=3)
+    indices: List[Dict[str, Any]] = []
+    if text:
+        for segment in text.split(";"):
+            segment = segment.strip()
+            if not segment.startswith("v_"):
+                continue
+            sym = segment.split("=")[0][2:]  # v_usINX -> usINX
+            disp = want.get(sym)
+            if not disp:
+                continue
+            inner = segment.split('"')[1] if '"' in segment else ""
+            parts = inner.split("~")
+            if len(parts) < 33:
+                continue
+            indices.append(
+                {
+                    "name": disp,
+                    "code": sym,
+                    "close": to_float(parts[3]),
+                    "pct": to_float(parts[32]),
+                    "chg": to_float(parts[31]),
+                    "main_net_in": None,
+                    "turnover": None,
+                    "source": SOURCE_GT_US,
+                }
+            )
+    return {"indices": indices, "source": SOURCE_GT_US}
+
+
+def load_or_fetch_us_index_snapshot(data_date: str) -> Dict[str, Any]:
+    return _load_or_fetch_build(_build_filename("fundflow_us_index", data_date), _fetch_us_index_snapshot_payload)
+
+
+def _fetch_us_curated_via_ulist() -> Dict[str, Dict[str, Any]]:
+    """直拉 72 只静态标的（保证 GICS 二级行业面板 100% 命中，不受 clist 限流丢页影响）。
+
+    EastMoney 美股 secid 按交易所前缀区分：NASDAQ=105. / NYSE=106.。
+    72 只 < 单批上限 80，故两个前缀各一批（共 2 次请求）即可全覆盖。
+    clist 全量扫描在沙箱 IP 下常被限流丢页，ulist 单次批量请求稳定，作为补全覆盖来源。
+    """
+    codes = _us_universe_codes()
+    sector_map = _us_code_to_sector()
+    out: Dict[str, Dict[str, Any]] = {}
+    for prefix in ("105.", "106."):
+        secids = [f"{prefix}{c}" for c in codes]
+        payload = em_get_direct(
+            FUND_FLOW_BATCH_HOST, "/api/qt/ulist.np/get",
+            {"fields": "f12,f14,f2,f3,f62,f100", "secids": ",".join(secids),
+             "fltt": "2", "invt": "2", "np": "1"},
+            timeout=20, retries=3,
+        )
+        if not payload:
+            continue
+        data = payload.get("data") or {}
+        diff = data.get("diff") or {}
+        rows = list(diff.values()) if isinstance(diff, dict) else diff
+        for row in rows:
+            code = str(row.get("f12") or "").strip().upper()
+            if not code:
+                continue
+            f100 = str(row.get("f100") or "").strip()
+            meta = sector_map.get(code, {})
+            out[code] = {
+                "code": code,
+                "name": row.get("f14") or meta.get("zh"),
+                "pct": to_float(row.get("f3")),
+                "main_net_in": to_float(row.get("f62")),
+                "sector": f100 if f100 and f100 != "-" else meta.get("sector", ""),
+            }
+    return out
+
+
+def _fetch_us_stock_fundflow_full() -> Tuple[List[Dict[str, Any]], str, int]:
+    """东方财富全美股资金流排行（fs=m:105+t:1,m:106+t:1，按主力净流入 f62 排序）。
+
+    服务端 pz 单页硬卡 100，故翻页拉全量（约 5300 只 NYSE + NASDAQ 普通股），用于：
+      - 个股资金流 TOP 排行（按 f62 取头尾）
+      - 全市场涨跌家数（breadth，按 f3 推导）
+      - GICS 二级行业聚合（按 us_gics_map.json 静态 sub_industry 映射过滤后聚合）
+    f3 在 fltt=2 下已是真实涨跌幅百分数（如 6.1 = +6.1%），直接采用，不再除 100。
+    f100 为东财自带 GICS 一级行业字段；f100='-' 的为 ETF / 非股票品种，解析时过滤。
+    """
+    fields = "f12,f14,f2,f3,f62,f100"
+    base = {
+        "pz": "100", "np": "1", "fltt": "2", "invt": "2",
+        "ut": EM_US_CLIST_UT, "fid": "f62",
+        "fields": fields, "fs": EM_US_FS,
+    }
+    host = "https://push2delay.eastmoney.com"
+    rows_by_code: Dict[str, Dict[str, Any]] = {}
+    pn = 1
+    total: Optional[int] = None
+    total_pages: Optional[int] = None
+    fail_retries = 0
+    short_retries = 0
+    max_retries = 4
+    retry_sleep = 2.0
+    while True:
+        params = {**base, "pn": str(pn), "po": "1"}
+        query = urllib.parse.urlencode(params)
+        text = http_get(f"{host}/api/qt/clist/get?{query}", EM_US_HEADERS, timeout=20, retries=3)
+        rows: List[Dict[str, Any]] = []
+        ok = False
+        if text:
+            try:
+                payload = json.loads(text)
+                data = payload.get("data") or {}
+                if total is None:
+                    total_raw = data.get("total")
+                    total = int(total_raw) if isinstance(total_raw, (int, float)) else None
+                    if total is not None:
+                        total_pages = max(1, (total + 99) // 100)
+                diff = data.get("diff") or {}
+                rows = list(diff.values()) if isinstance(diff, dict) else diff
+                ok = bool(rows)
+            except json.JSONDecodeError:
+                ok = False
+        if not ok:
+            fail_retries += 1
+            if fail_retries >= max_retries:
+                if total_pages is not None and pn >= total_pages:
+                    break
+                # 持续失败：跳过本页继续（最多丢 ~100 只），避免丢失整条尾部
+                pn += 1
+                fail_retries = 0
+                short_retries = 0
+                if pn > 80:  # 安全阀
+                    break
+                time.sleep(retry_sleep)
+                continue
+            time.sleep(retry_sleep)
+            continue
+        # 限流导致的「半页」：非末页却少于 100 行 → 重试该页（不推进 pn）
+        if total_pages is not None and pn < total_pages and len(rows) < 100:
+            short_retries += 1
+            if short_retries < max_retries:
+                time.sleep(retry_sleep)
+                continue
+            short_retries = 0  # 重试仍半页：接受残缺数据，继续
+        else:
+            short_retries = 0
+        fail_retries = 0
+        for row in rows:
+            code = str(row.get("f12") or "").strip().upper()
+            if not code:
+                continue
+            # 过滤 ETF / 非股票品种（f100 为空或 '-'）
+            f100 = str(row.get("f100") or "").strip()
+            if not f100 or f100 == "-":
+                continue
+            pct_raw = to_float(row.get("f3"))
+            rows_by_code[code] = {
+                "code": code,
+                "name": row.get("f14"),
+                "pct": pct_raw,  # 真实涨跌幅百分数，不再除 100
+                "main_net_in": to_float(row.get("f62")),
+                "sector": f100,  # GICS 一级（东财自带），未在 curated 映射中时可用作兜底
+            }
+        # 终止判定：已抓满预期页数，或去重计数已达 total（东财 total 不含 ETF 时可直接命中）
+        if total_pages is not None and pn >= total_pages:
+            break
+        if total is not None and len(rows_by_code) >= total:
+            break
+        pn += 1
+        if pn > 80:  # 安全阀：m:105 约 6000+ 只，放宽到 80 页
+            break
+    rows = list(rows_by_code.values())
+    if not rows:
+        return [], "东方财富美股个股资金流接口暂不可用", 0
+    # 补全覆盖：clist 限流丢页时，用 ulist 直拉 72 只静态标的，保证 GICS 二级面板 100% 命中
+    curated = _fetch_us_curated_via_ulist()
+    added = 0
+    for code, c in curated.items():
+        if code not in rows_by_code:
+            rows_by_code[code] = c
+            added += 1
+    if added:
+        print(f"[info] 美股 ulist 补全覆盖 {added} 只静态标的（clist 限流丢页补齐）", file=sys.stderr)
+    rows = list(rows_by_code.values())
+    coverage = (len(rows_by_code) / total) if total else None
+    if coverage is not None and coverage < 0.9:
+        print(f"[warn] 美股全量抓取覆盖偏低：{len(rows_by_code)}/{total}（{coverage:.0%}），可能存在限流丢页", file=sys.stderr)
+    return rows, f"东方财富延迟行情主机全美股资金流（覆盖 {len(rows)} 只）", (total or len(rows))
+
+
+def load_or_fetch_us_stock_fundflow(data_date: str, scope: str = "full") -> Tuple[List[Dict[str, Any]], str]:
+    filename = f"stock_fundflow_us_today_full_{data_date}.json"
+    cached = load_build_json(filename)
+    if cached is not None:
+        return list(cached.get("rows") or []), cached.get("source", "build/full")
+    rows, src, _total = _fetch_us_stock_fundflow_full()
+    if not rows:
+        return [], src or "东方财富美股个股资金流接口暂不可用"
+    save_build_json(filename, {"data_date": data_date, "scope": scope, "source": src, "rows": rows})
+    return rows, src
+
+
+def _fetch_us_global_liquidity_payload() -> Dict[str, Any]:
+    """全球资金面 / 外部流动性（美股北向的等价模块）。
+
+    腾讯 gtimg：usVIX（恐慌指数）、usCL（WTI 原油）可解析；usDXY / usTNX / usXAU 在 gtimg 无对应，
+    解析不到则优雅降级（不出现在结果中，渲染层显示「—」）。
+    """
+    want = {gt: disp for disp, gt in US_MACRO}
+    codes = ",".join(gt for _, gt in US_MACRO)
+    text = http_get(f"https://qt.gtimg.cn/q={codes}", GTIMG_HEADERS, timeout=15, retries=2)
+    items: List[Dict[str, Any]] = []
+    if text:
+        for segment in text.split(";"):
+            segment = segment.strip()
+            if not segment.startswith("v_"):
+                continue
+            sym = segment.split("=")[0][2:]  # v_usVIX -> usVIX
+            disp = want.get(sym)
+            if not disp:
+                continue
+            inner = segment.split('"')[1] if '"' in segment else ""
+            parts = inner.split("~")
+            if len(parts) < 33:
+                continue
+            price = to_float(parts[3])
+            pct = to_float(parts[32])
+            if price is None and pct is None:
+                continue
+            items.append({"name": disp, "code": sym, "price": price, "pct": pct})
+    return {"items": items, "source": SOURCE_GT_US}
+
+
+def load_or_fetch_us_global_liquidity(data_date: str) -> Dict[str, Any]:
+    return _load_or_fetch_build(_build_filename("fundflow_us_global", data_date), _fetch_us_global_liquidity_payload)
+
+
 
