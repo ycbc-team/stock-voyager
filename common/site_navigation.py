@@ -14,6 +14,7 @@ SITE_TABS = [
     {"key": "fundflow_hk", "label": "港股资金流", "href": "fundflow_hk.html"},
     {"key": "stocktrend_hk", "label": "港股个股", "href": "stocktrend_hk.html"},
     {"key": "fundflow_us", "label": "美股资金流", "href": "fundflow_us.html"},
+    {"key": "stocktrend_us", "label": "美股个股", "href": "stocktrend_us.html"},
 ]
 
 
@@ -191,6 +192,33 @@ html, body {
   .site-hub-hero { padding: 20px 18px; border-radius: 18px; }
   .site-hub h1 { font-size: 26px; }
 }
+
+/* ── 统一内页顶部模块（资金流 / 个股走势 共 6 页共用，对齐站点 GitHub 深色语言）── */
+.page-hdr {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 16px 24px; padding: 22px 24px; margin-bottom: 16px; border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: linear-gradient(135deg, rgba(22,27,34,.96), rgba(19,28,44,.92));
+  box-shadow: 0 10px 30px rgba(0,0,0,.28);
+}
+.page-hdr .ph-l { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.page-hdr .ph-logo {
+  width: 44px; height: 44px; border-radius: 11px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #1f6feb, #388bfd);
+}
+.page-hdr .ph-logo svg { width: 26px; height: 26px; }
+.page-hdr .ph-title { min-width: 0; }
+.page-hdr h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: .3px; color: #f0c040; line-height: 1.2; }
+.page-hdr .ph-sub { margin-top: 6px; font-size: 12px; color: #8b949e; line-height: 1.5; }
+.page-hdr .ph-r { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
+.page-hdr .ph-meta { font-size: 11px; color: #8b949e; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+.page-hdr .ph-meta b { color: #c9d1d9; font-weight: 600; }
+@media (max-width: 720px) {
+  .page-hdr { flex-direction: column; align-items: flex-start; }
+  .page-hdr .ph-r { align-items: flex-start; }
+  .page-hdr .ph-meta { text-align: left; }
+}
 """
 
 
@@ -204,6 +232,43 @@ def render_site_nav(active: str) -> str:
             f'<a class="{classes}" href="{escape(tab["href"])}">{escape(tab["label"])}</a>'
         )
     return '<nav class="site-nav" aria-label="站点导航">' + "".join(items) + "</nav>"
+
+
+def render_page_header(
+    *,
+    title: str,
+    subtitle: str,
+    data_date: str = "",
+    weekday: str = "",
+    generated_at: str = "",
+    source_text: str = "公开数据整理",
+    scope_line: str = "",
+) -> str:
+    """统一的内页顶部模块（资金流 / 个股走势 共 6 页共用）。
+
+    结构固定为「左：logo + 标题区（h1 / subtitle）｜右：数据日期 + 来源/更新 + 范围说明」，
+    仅文案按页面变化。title / subtitle / scope_line 信任调用方（代码内常量，可含 <b> 等标签），
+    其余字段做 HTML 转义。
+    """
+    scope = f'<div class="ph-meta">{scope_line}</div>' if scope_line else ""
+    return (
+        '<header class="page-hdr">\n'
+        '  <div class="ph-l">\n'
+        '    <div class="ph-logo"><svg viewBox="0 0 24 24" fill="none">'
+        '<path d="M4 17l5-6 4 3 7-9" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>'
+        '<path d="M15 5h5v5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>\n'
+        '    <div class="ph-title">\n'
+        f'      <h1>{title}</h1>\n'
+        f'      <div class="ph-sub">{escape(subtitle)}</div>\n'
+        '    </div>\n'
+        '  </div>\n'
+        '  <div class="ph-r">\n'
+        f'    <div class="ph-meta">数据日期 {escape(data_date)}（{escape(weekday)}）· 收盘</div>\n'
+        f'    <div class="ph-meta">更新于 <b>{escape(generated_at)}</b> ｜ {escape(source_text)}</div>\n'
+        f'    {scope}'
+        '  </div>\n'
+        '</header>\n'
+    )
 
 
 def render_site_index(title: str, subtitle: str, date_text: str, cards: Iterable[Mapping[str, str]]) -> str:

@@ -1,11 +1,6 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; background:#0d1117; color:#c9d1d9; line-height:1.6; }
 .container { max-width: 860px; margin: 0 auto; padding: 16px; }
-.header { background:linear-gradient(135deg,#161b22,#1a1a3e); border:1px solid #30363d; border-radius:16px; padding:26px 22px; margin-bottom:14px; text-align:center; }
-.header .tag { display:inline-block; font-size:11px; color:#58a6ff; background:rgba(88,166,255,.1); border:1px solid rgba(88,166,255,.3); padding:3px 12px; border-radius:20px; margin-bottom:10px; }
-.header h1 { font-size:23px; color:#f0c040; margin-bottom:6px; }
-.header .subtitle { font-size:13px; color:#8b949e; }
-.header .date { font-size:11px; color:#6e7681; margin-top:8px; }
 .sector { border-radius:12px; padding:14px; margin-bottom:12px; }
 .sector h2 { font-size:15px; margin-bottom:10px; }
 .sector-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
@@ -194,3 +189,11 @@ body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; bac
 .roe-tier:last-child { border-bottom:none; }
 .roe-label { font-weight:bold; min-width:96px; white-space:nowrap; }
 .roe-names { color:#c9d1d9; line-height:1.7; }
+
+/* 美股惯例：涨绿跌红（覆盖 A股/港股 涨红跌绿 的 .up/.down 着色） */
+.market-us .stock-card .data .up { color:#3fb950; }
+.market-us .stock-card .data .down { color:#f85149; }
+.market-us .kv .v.up { color:#3fb950; }
+.market-us .kv .v.down { color:#f85149; }
+.market-us .metric-card .mc-s.up { color:#3fb950; }
+.market-us .metric-card .mc-s.down { color:#f85149; }
