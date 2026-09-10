@@ -1,9 +1,13 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; background:#0d1117; color:#c9d1d9; line-height:1.6; }
-.container { max-width: 860px; margin: 0 auto; padding: 16px; }
-.sector { border-radius:12px; padding:14px; margin-bottom:12px; }
-.sector h2 { font-size:15px; margin-bottom:10px; }
-.sector-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
+.container { max-width: 1480px; margin: 0 auto; padding: 16px 0; }
+.sector { border-radius:12px; padding:14px 0; margin-bottom:12px; }
+.sector h2 { font-size:15px; margin-bottom:10px; padding:0 14px; }
+.sector-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; padding:0 14px; }
+/* 宽屏下卡片网格自适应多列，避免模块撑满后单卡过宽（对齐资金流页 KPI 网格节奏） */
+@media (min-width:760px){ .sector-grid{ grid-template-columns:repeat(3, minmax(0,1fr)); } }
+@media (min-width:1100px){ .sector-grid{ grid-template-columns:repeat(4, minmax(0,1fr)); } }
+@media (min-width:1500px){ .sector-grid{ grid-template-columns:repeat(5, minmax(0,1fr)); } }
 .sector-consumer { background:linear-gradient(135deg,#1c1a0e,#1a1a2e); border:1px solid #3d3520; }
 .sector-consumer h2 { color:#f0c040; }
 .sector-cycle { background:linear-gradient(135deg,#1c1410,#1a1414); border:1px solid #3d2820; }
@@ -12,8 +16,8 @@ body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; bac
 .sector-tech h2 { color:#3fb950; }
 .sector-finance { background:linear-gradient(135deg,#0e141c,#0e141a); border:1px solid #1a2d3d; }
 .sector-finance h2 { color:#58a6ff; }
-.sub-group { grid-column:span 2; }
-.sub-group .sub-h { font-size:12px; color:#8b949e; margin:8px 0 6px; padding-left:6px; border-left:2px solid #30363d; }
+.sub-group { grid-column:1 / -1; }
+.sub-group .sub-h { font-size:12px; color:#8b949e; margin:8px 14px 6px; padding-left:6px; border-left:2px solid #30363d; }
 .stock-card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:10px 12px; transition:transform .15s,box-shadow .15s; cursor:pointer; display:block; min-width:0; }
 .stock-card:hover { transform:translateY(-2px); box-shadow:0 4px 16px rgba(88,166,255,.15); border-color:#58a6ff; }
 .stock-card .industry { font-size:10px; color:#6e7681; }
@@ -182,10 +186,10 @@ body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; bac
   .yield-vs .yv-v { font-size:14px; }
   .hist-table { font-size:12px; }
 }
-@media (max-width:460px){ .container { padding:10px; } .stock-card { padding:8px 10px; } .metric-cards { grid-template-columns:repeat(2,1fr); } }
-.roe-section { background:linear-gradient(135deg,#0d1f0d 0%,#0d2818 100%); border:1px solid #1a3d2e; border-radius:16px; padding:18px; margin-bottom:14px; }
-.roe-section h2 { font-size:15px; margin-bottom:12px; color:#3fb950; }
-.roe-tier { display:flex; align-items:baseline; gap:10px; font-size:12px; padding:6px 0; border-bottom:1px dashed #1a3d2e; }
+@media (max-width:460px){ .container { padding:10px 0; } .stock-card { padding:8px 10px; } .metric-cards { grid-template-columns:repeat(2,1fr); } }
+.roe-section { background:linear-gradient(135deg,#0d1f0d 0%,#0d2818 100%); border:1px solid #1a3d2e; border-radius:16px; padding:18px 0; margin-bottom:14px; }
+.roe-section h2 { font-size:15px; margin-bottom:12px; color:#3fb950; padding:0 18px; }
+.roe-tier { display:flex; align-items:baseline; gap:10px; font-size:12px; padding:6px 18px; border-bottom:1px dashed #1a3d2e; }
 .roe-tier:last-child { border-bottom:none; }
 .roe-label { font-weight:bold; min-width:96px; white-space:nowrap; }
 .roe-names { color:#c9d1d9; line-height:1.7; }
@@ -194,6 +198,14 @@ body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; bac
 .market-us .stock-card .data .up { color:#3fb950; }
 .market-us .stock-card .data .down { color:#f85149; }
 .market-us .kv .v.up { color:#3fb950; }
+
+/* 个股页模块边框顶到屏幕边缘（内部文字保持内边距），对齐资金流页满宽感 */
+.page-hdr { padding: 22px 0; }
+.page-hdr .ph-l { padding-left: 24px; }
+.page-hdr .ph-r { padding-right: 24px; }
+@media (max-width:720px){
+  .page-hdr .ph-l, .page-hdr .ph-r { padding: 0 18px; }
+}
 .market-us .kv .v.down { color:#f85149; }
 .market-us .metric-card .mc-s.up { color:#3fb950; }
 .market-us .metric-card .mc-s.down { color:#f85149; }
