@@ -289,11 +289,11 @@ def write_html(path, result, market="ashare"):
             dec = br.get("decline")
             flat = br.get("flat")
             bcls = "up" if (adv or 0) >= (dec or 0) else "down"
-            val = f"{adv}↑ / {dec}↓" if adv is not None and dec is not None else "—"
+            val = f'<span class="up">{adv}↑</span> / <span class="down">{dec}↓</span>' if adv is not None and dec is not None else "—"
             total_n = (adv or 0) + (dec or 0) + (flat or 0)
             sub = f"共 {total_n:,} 只 · 上涨占比 {adv / total_n * 100:.0f}%" if total_n else "—"
             sample_note = "样本内覆盖(非全市场)" if br.get("sample_based") else "港股无涨跌停板"
-            kpis.append(kpi("港股涨跌家数", "", val, bcls, sample_note, "flat", sub, "up" if bcls == "up" else "dn"))
+            kpis.append(kpi("港股涨跌家数", "", val, "flat", sample_note, "flat", sub, "up" if bcls == "up" else "dn"))
         elif hk:
             up_n = sum(1 for x in hk if (x.get("pct") or 0) > 0)
             dn_n = sum(1 for x in hk if (x.get("pct") or 0) < 0)
@@ -316,10 +316,10 @@ def write_html(path, result, market="ashare"):
         if br.get("available"):
             adv = br.get("advance"); dec = br.get("decline"); flat = br.get("flat")
             bcls = "up" if (adv or 0) >= (dec or 0) else "down"
-            val = f"{adv}↑ / {dec}↓" if adv is not None and dec is not None else "—"
+            val = f'<span class="up">{adv}↑</span> / <span class="down">{dec}↓</span>' if adv is not None and dec is not None else "—"
             total_n = (adv or 0) + (dec or 0) + (flat or 0)
             sub = f"共 {total_n:,} 只 · 上涨占比 {adv / total_n * 100:.0f}%" if total_n else "—"
-            kpis.append(kpi("美股涨跌家数", "", val, bcls, "全市场推导", "flat", sub, "up" if bcls == "up" else "dn"))
+            kpis.append(kpi("美股涨跌家数", "", val, "flat", "全市场推导", "flat", sub, "up" if bcls == "up" else "dn"))
         elif us:
             up_n = sum(1 for x in us if (x.get("pct") or 0) > 0)
             dn_n = sum(1 for x in us if (x.get("pct") or 0) < 0)
@@ -349,11 +349,11 @@ def write_html(path, result, market="ashare"):
             lu = br.get("limit_up")
             ld = br.get("limit_down")
             bcls = "up" if (adv or 0) >= (dec or 0) else "down"
-            val = f"{adv}↑ / {dec}↓" if adv is not None and dec is not None else "—"
+            val = f'<span class="up">{adv}↑</span> / <span class="down">{dec}↓</span>' if adv is not None and dec is not None else "—"
             chg = f"涨停 {lu} · 跌停 {ld}" if (lu is not None and ld is not None) else "涨停/跌停暂缺"
             total_n = (adv or 0) + (dec or 0) + (flat or 0)
             sub = f"共 {total_n:,} 只 · 上涨占比 {adv / total_n * 100:.0f}%" if total_n else "—"
-            kpis.append(kpi("个股涨跌家数", "", val, bcls, chg, "flat", sub, "up" if bcls == "up" else "dn"))
+            kpis.append(kpi("个股涨跌家数", "", val, "flat", chg, "flat", sub, "up" if bcls == "up" else "dn"))
         elif sw:
             up_n = sum(1 for x in sw if (x.get("pct") or 0) > 0)
             dn_n = sum(1 for x in sw if (x.get("pct") or 0) < 0)
