@@ -15,6 +15,7 @@ stocktrend UI 渲染脚本
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -29,6 +30,7 @@ from common.storage import default_data_dir
 from common.storage import default_site_dir
 from common.site_navigation import render_site_nav
 from common.site_navigation import site_nav_css
+from common.site_navigation import render_page_header
 
 
 SIGNAL_TEXT = ["可分批关注", "持有观察", "谨慎观望"]
@@ -929,6 +931,16 @@ def _render_roster(data: Dict[str, Any]) -> str:
 </div>'''
 
 
+def _weekday_cn(date_str: str) -> str:
+    """由 YYYY-MM-DD 日期串返回中文星期（周一~周日），解析失败返回空串。"""
+    try:
+        return ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][
+            datetime.datetime.strptime(date_str[:10], "%Y-%m-%d").weekday()
+        ]
+    except Exception:
+        return ""
+
+
 def render_page(data: Dict[str, Any]) -> str:
     css = _load_css()
     meta = data["meta"]
@@ -946,13 +958,14 @@ def render_page(data: Dict[str, Any]) -> str:
         f'<title>{meta["title"]}</title>\n<style>{css}{site_nav_css()}</style>\n</head>\n<body class="site-shell-body market-{market_code}">\n{render_site_nav(nav_active)}\n<div class="container">\n'
     )
     html.append(
-        f'''<div class="header">
-  <div class="tag">静态收盘快照 · 非实时 · {meta.get("snap_iso", meta.get("tag", ""))}</div>
-  <h1>{meta.get("title", "")}</h1>
-  <div class="subtitle">{_public_subtitle(meta)}</div>
-  <div class="databadge"><b>这不是实时行情页面。</b> 当前页面只展示收盘后的静态结果，适合盘后复盘和清单式跟踪，不展示盘中实时跳动数据。</div>
-</div>
-'''
+        render_page_header(
+            title=meta.get("title", ""),
+            subtitle=_public_subtitle(meta),
+            data_date=meta.get("snap_iso", ""),
+            weekday=_weekday_cn(meta.get("snap_iso", "")),
+            generated_at=meta.get("snap_iso", ""),
+            source_text="公开数据整理",
+        )
     )
     sector_class_map = {
         "consumer": "consumer",

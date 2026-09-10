@@ -29,6 +29,7 @@ from common.storage import default_data_dir
 from common.storage import default_site_dir
 from common.site_navigation import render_site_nav
 from common.site_navigation import site_nav_css
+from common.site_navigation import render_page_header
 from common.market_data import to_float
 
 
@@ -174,21 +175,15 @@ def write_html(path, result, market="ashare"):
     )
 
     S.append(
-        f'''  <div class="hdr">
-    <div class="hdr-l">
-      <div class="logo"><svg viewBox="0 0 24 24" fill="none"><path d="M4 17l5-6 4 3 7-9" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 5h5v5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-      <div>
-        <h1>{h1}</h1>
-        <div class="sub">{sub}</div>
-      </div>
-    </div>
-    <div class="hdr-r">
-      <span class="live-badge"><span class="dot"></span>数据日期 {d}（{wd}）· 收盘</span>
-      <div class="src-line">更新于 <b>{result["generated_at"]}</b> ｜ {product_source_text()}</div>
-      <div class="src-line">{src_line}</div>
-    </div>
-  </div>
-'''
+        render_page_header(
+            title=h1,
+            subtitle=sub,
+            data_date=d,
+            weekday=wd,
+            generated_at=result["generated_at"],
+            source_text=product_source_text(),
+            scope_line=src_line,
+        )
     )
 
     mv = result.get("market_verdict") or {}
