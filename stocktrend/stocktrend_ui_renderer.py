@@ -47,15 +47,19 @@ VIEW_BASIS_NOTE = (
     '</div>'
 )
 
-# 「是否推荐入手」三档结论的依据说明（整页底部，免责声明前）
-SIGNAL_BASIS_NOTE = (
-    '<div class="basis-explain">'
-    '卡片「是否推荐入手」依据以下多维打分：当前股价处于过去52周分位的区间值（≤35%+1分，≥75%-1分）、PE（≤20+1分，≥35-1分）、港股/A股股息率≥2.5%+1分，A股主力净流入&gt;0+1分，得出3种结论：<br>'
-    '🟢 可分批关注——≥3分；<br>'
-    '🟡 持有观察——1–2分；<br>'
-    '🔴 谨慎观望——≤0分；'
-    '</div>'
-)
+def _signal_basis_note(market_code: str) -> str:
+    """「是否推荐入手」三档结论的依据说明（整页底部，免责声明前）。三市场统一：均叠加巴菲特综合评分质量修正。"""
+    flow_note = "A股主力净流入&gt;0+1分，" if market_code == "ashare" else ""
+    return (
+        '<div class="basis-explain">'
+        '卡片「是否推荐入手」依据以下多维打分：当前股价处于过去52周分位的区间值（≤35%+1分，≥75%-1分）、'
+        'PE（≤20+1分，≥35-1分）、股息率≥2.5%+1分，' + flow_note +
+        '并叠加巴菲特综合评分质量修正（≥60分+2，≥45分+1，<25分-1），得出3种结论：<br>'
+        '🟢 可分批关注——≥3分；<br>'
+        '🟡 持有观察——1–2分；<br>'
+        '🔴 谨慎观望——≤0分；'
+        '</div>'
+    )
 
 
 def default_input_dir() -> str:
@@ -185,6 +189,15 @@ def _signal_basis_text(stock: Dict[str, Any], market_code: str) -> str:
         elif main_inflow < 0:
             reasons.append("主力流出")
 
+    score_val = _to_float(stock.get("score"))
+    if score_val is not None:
+        if score_val >= 60:
+            reasons.append("质地优(巴菲特≥60)")
+        elif score_val >= 45:
+            reasons.append("质地较好(巴菲特≥45)")
+        elif score_val < 25:
+            reasons.append("质地偏弱(巴菲特<25)")
+
     if not reasons:
         return "依据：52周位置、估值与资金面综合判断"
     return "依据：" + " / ".join(reasons[:3])
@@ -209,6 +222,8 @@ def _public_subtitle(meta: Dict[str, Any]) -> str:
     market_code = meta.get("market_code", "hk")
     if market_code == "ashare":
         return "聚焦核心 A 股清单，便于按估值、位置、资金面、财务与风险提示做盘后复盘。"
+    if market_code == "us":
+        return "聚焦美股核心标的，按 GICS 二级行业分类，便于按估值、位置、财务与风险提示做盘后复盘（美股惯例：涨绿跌红）。"
     return "聚焦港股代表标的，便于按估值、位置、南向持股、分红与风险提示做盘后复盘。"
 
 
@@ -220,6 +235,8 @@ def _public_databadge(meta: Dict[str, Any]) -> str:
     market_code = meta.get("market_code", "hk")
     if market_code == "ashare":
         return "⚠️ 数据口径：本页仅展示收盘后的静态结果；价格、估值、资金面、财务与分红为公开数据整理，缺失字段直接显示“—”。"
+    if market_code == "us":
+        return "⚠️ 数据口径：本页仅展示收盘后的静态结果；价格、估值、财务为公开数据整理，缺失字段直接显示“—”；美股惯例：涨绿跌红。"
     return "⚠️ 数据口径：本页仅展示收盘后的静态结果；价格、估值、南向持股、财务与分红为公开数据整理，缺失字段直接显示“—”。"
 
 
@@ -577,7 +594,8 @@ def _render_dividend_panorama(stock: Dict[str, Any], fin3: List[Dict[str, Any]],
 
 def _render_build_module(section_prefix: str, build: Optional[Dict[str, Any]], signal: int,
                         pe: Optional[float] = None, w52l=None, w52h=None, pos=None,
-                        trend: str = "", pb: Optional[float] = None, market: str = "ashare") -> str:
+                        trend: str = "", pb: Optional[float] = None, market: str = "ashare",
+                        currency: str = "元") -> str:
     if not build:
         return f'''<div class="module" id="{section_prefix}-build">
           <h2><span class="num">2</span>买卖决策与建仓</h2>
@@ -607,7 +625,7 @@ def _render_build_module(section_prefix: str, build: Optional[Dict[str, Any]], s
         target_head = "估值目标价（PE 视角）"
         target_text = (
             f"当前 PE {pe_show}；以合理 PE 中枢 {fair_show} 与每股收益测算，估值目标价约 "
-            f"<b>{('—' if target is None else f'{target:.2f}')}</b> 元。模型估算，请结合自身风险承受力。"
+            f"<b>{('—' if target is None else f'{target:.2f}')}</b> {currency}。模型估算，请结合自身风险承受力。"
         )
     if view == "估值位置暂缺":
         vcls, vtxt = "na", "估值位置暂缺，无法判断"
@@ -671,7 +689,15 @@ def _render_score_module(section_prefix: str, score: Optional[int], score_parts:
         ),
         "moat": ("—" if stock.get("margin") is None else f"毛利率 {stock['margin']:.1f}%"),
     }
-    gauge_width = 0 if score is None else int(round(score / 100 * 100))
+    # 美股股息率达标奖励：额外 +1 分（推荐入手加分），作为第 6 条因子展示
+    is_us = (stock.get("market") == "us")
+    if is_us and parts.get("div_bonus"):
+        labels = labels + [("div_bonus", "股息率达标奖励")]
+        maxmap = dict(maxmap)
+        maxmap["div_bonus"] = 1
+        subs = dict(subs)
+        subs["div_bonus"] = "股息率≥阈值额外+1"
+    gauge_width = 0 if score is None else int(round(min(score, 100) / 100 * 100))
     bars = []
     for key, label in labels:
         val = parts.get(key, 0)
@@ -684,7 +710,7 @@ def _render_score_module(section_prefix: str, score: Optional[int], score_parts:
     return f'''<div class="module" id="{section_prefix}-score">
           <h2><span class="num">6</span>巴菲特模型评分</h2>
           <div class="gauge"><div style="width:{gauge_width}%;background:#d29922"></div></div>
-          <div class="reason">综合评分 <b style="color:#d29922">{total} / 100</b>（模型估算，仅供参考）。</div>
+          <div class="reason">综合评分 <b style="color:#d29922">{total} / 100</b>（模型估算，仅供参考）。{('<span style="color:#3fb950;font-weight:600;"> 含股息率达标奖励 +1</span>' if (is_us and parts.get("div_bonus")) else '')}</div>
           {''.join(bars)}
           <div class="note">评分逻辑：ROE盈利能力(30) + 估值合理性(25) + 分红回报(15) + 财务稳健/资产质量(15) + 护城河/现金流(15)。含主观假设，不构成投资建议。</div>
           <div style="margin-top:14px;padding:12px 14px;border:1px solid #30363d;border-radius:8px;background:#0d1117;">
@@ -719,6 +745,14 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
             "holding_line": f"南向持股：{_fmt_pct(_to_float(stock.get('south')))}",
             "holding_shares": f"南向股数：{_fmt_shares(_to_float(stock.get('south_shares')))}",
             "badge": "港股收盘口径",
+        },
+        "us": {
+            "currency_unit": "美元",
+            "code_suffix": f"{stock['code']}.US",
+            "flow_line": f"成交额：{_fmt_amount(stock.get('amount'))}",
+            "holding_line": "无互通持股",
+            "holding_shares": "—",
+            "badge": "美股收盘口径",
         },
     }
     market_meta = meta_map[market_code]
@@ -772,6 +806,8 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
         )
         capital_note = (
             f"资金面数据截至 <b>{snap_iso} 收盘后</b>（收盘口径）：南向持股来自公开披露（T-1）；成交额为收盘口径。"
+            if market_code == "hk" else
+            f"资金面数据截至 <b>{snap_iso} 收盘后</b>（收盘口径）：美股无陆股通/港股通机制，资金面以成交额为主要锚点。"
         )
     en_html = f'<div class="en">{en_text}</div>' if (en_text and en_text != stock.get("zh")) else ''
     snap_md = ""
@@ -781,12 +817,14 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
             snap_md = f"{int(_m)}月{int(_d)}日"
         except Exception:
             snap_md = ""
-    # 分市场无风险利率：A股=中债10Y，港股=美债10Y（港币联系汇率下港元机会成本代理）
-    _is_hk = (market_code == "hk")
-    _treasury_10y = TREASURY_10Y_HK if _is_hk else TREASURY_10Y
-    _treasury_name = "美债10年期国债收益率" if _is_hk else "中债10年期国债收益率"
+    # 分市场无风险利率：A股=中债10Y，港股/美股=美债10Y（港元联系汇率下及美元资产机会成本代理）
+    _is_hk_or_us = (market_code in ("hk", "us"))
+    _treasury_10y = TREASURY_10Y_HK if _is_hk_or_us else TREASURY_10Y
+    _treasury_name = "美债10年期国债收益率" if _is_hk_or_us else "中债10年期国债收益率"
     _treasury_note = ("截至2026-09-07，港币联系汇率下作为港元机会成本代理"
-                      if _is_hk else "东方财富宏观口径，9月1日附近")
+                      if market_code == "hk" else
+                      ("截至2026-09-07，作为美元资产机会成本代理" if market_code == "us"
+                       else "东方财富宏观口径，9月1日附近"))
     return f'''<div class="modal-overlay">
     <label class="modal-backdrop" for="{modal_id}"></label>
     <div class="modal">
@@ -822,7 +860,8 @@ def _render_modal(stock: Dict[str, Any], market_code: str, snap_iso: str = "") -
         {_render_build_module(section_prefix, build, signal, _to_float(stock.get("pe")),
                               _to_float(stock.get("w52l")), _to_float(stock.get("w52h")),
                               stock.get("pos"), stock.get("trend"),
-                              _to_float(stock.get("pb")), stock.get("market"))}
+                              _to_float(stock.get("pb")), stock.get("market"),
+                              currency=market_meta["currency_unit"])}
         <div class="module" id="{section_prefix}-capital">
           <h2><span class="num">3</span>资金面动态</h2>
           <div class="summary">{stock.get("capital", "资金面描述暂缺")}</div>
@@ -894,7 +933,7 @@ def render_page(data: Dict[str, Any]) -> str:
     css = _load_css()
     meta = data["meta"]
     market_code = meta.get("market_code", "hk")
-    nav_active = "stocktrend_ashare" if market_code == "ashare" else "stocktrend_hk"
+    nav_active = {"ashare": "stocktrend_ashare", "hk": "stocktrend_hk", "us": "stocktrend_us"}.get(market_code, "stocktrend_hk")
     stocks = data["stocks"]
     by_sector = {}
     for stock in stocks:
@@ -904,7 +943,7 @@ def render_page(data: Dict[str, Any]) -> str:
     html.append(
         f'<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n'
         f'<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f'<title>{meta["title"]}</title>\n<style>{css}{site_nav_css()}</style>\n</head>\n<body class="site-shell-body">\n{render_site_nav(nav_active)}\n<div class="container">\n'
+        f'<title>{meta["title"]}</title>\n<style>{css}{site_nav_css()}</style>\n</head>\n<body class="site-shell-body market-{market_code}">\n{render_site_nav(nav_active)}\n<div class="container">\n'
     )
     html.append(
         f'''<div class="header">
@@ -938,7 +977,7 @@ def render_page(data: Dict[str, Any]) -> str:
         notes.append(f'<div class="databadge">⚠️ 数据抓取提示：{warning}</div>')
     html.append(
         f'''<div class="page-notes">{''.join(notes)}</div>
-{SIGNAL_BASIS_NOTE}
+{_signal_basis_note(market_code)}
 <div class="disclaimer"><p>{meta.get("disclaimer", "")}</p></div>
 <div class="footer">{_public_footer(meta)}</div>
 </div>

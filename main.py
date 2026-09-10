@@ -76,6 +76,12 @@ def build_site_index(fundflow_result: Dict | None = None, stocktrend_result: Dic
             "badge": "美股资金",
             "description": "看标普/纳指/道指强弱、GICS 行业主力净流入、全球资金面（VIX/原油等）、个股资金流 TOP；涨绿跌红（美股惯例）。",
         },
+        {
+            "title": "美股个股走势",
+            "href": "stocktrend_us.html",
+            "badge": "美股清单",
+            "description": "按 GICS 二级行业查看 43 只美股核心标的的收盘快照、估值、位置与财务排雷，弹窗模块与港股页一致；涨绿跌红（美股惯例）。",
+        },
     ]
 
     html = render_site_index(
@@ -95,7 +101,7 @@ def main() -> Dict:
     parser.add_argument("--date", help="交易日 YYYY-MM-DD（默认取最近交易日）")
     parser.add_argument("--out", help="页面 JSON 输出目录（默认 <项目根>/build/data）")
     parser.add_argument("--topn", type=int, default=10, help="fundflow 个股资金流 TOP 数量")
-    parser.add_argument("--stocktrend-market", choices=["all", "ashare", "hk"], default="all", help="stocktrend 输出市场")
+    parser.add_argument("--stocktrend-market", choices=["all", "ashare", "hk", "us"], default="all", help="stocktrend 输出市场")
     parser.add_argument(
         "--only",
         choices=["all", "fundflow", "stocktrend"],

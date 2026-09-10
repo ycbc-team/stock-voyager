@@ -56,7 +56,15 @@ from stocktrend.stocktrend_data_fetcher import (
     _fetch_hk_financial_indicator,
     _fetch_hk_financial_analysis,
     _fetch_hk_dividends,
+    _load_us_base_data,
+    _load_us_spot,
+    _load_us_hist_cache,
+    _load_us_financials,
+    _load_us_dividends,
 )
+
+# 美股股息率达标奖励阈值（%）：>= 该股息率，推荐入手综合评分额外 +1 分
+US_DIVIDEND_THRESHOLD = 2.0
 
 
 def _build_issue_text(label: str, issue: Optional[str]) -> Optional[str]:
@@ -260,29 +268,54 @@ def _compute_defense(fin3: List[Dict[str, Any]], last_div: Optional[float] = Non
     return {"level": level, "reasons": reasons}
 
 
-def _build_signal(pos: Optional[float], pe: Optional[float], div: Optional[float], main_inflow: Optional[float]) -> int:
-    score = 0
-    if pos is not None and pos <= 35:
-        score += 1
-    elif pos is not None and pos >= 75:
-        score -= 1
-    if pe is not None and pe > 0 and pe <= 20:
-        score += 1
-    elif pe is not None and pe >= 35:
-        score -= 1
+def _build_signal(pos: Optional[float], pe: Optional[float], div: Optional[float], score: Optional[int] = None, main_inflow: Optional[float] = None) -> int:
+    """「是否推荐入手」三档信号（A股/港股/美股通用）。
+
+    基础分（估值/位置/股息/资金）：
+    - pos ≤35% +1，≥75% -1
+    - PE ≤20 +1，≥35 -1
+    - 股息率 ≥2.5% +1
+    - A股主力净流入 >0 +1（仅 A股；港股/美股传 None）
+    质量修正（巴菲特综合评分，避免优质股被位置/估值扣成谨慎观望）：
+    - 评分 ≥60 +2，≥45 +1，<25 -1
+    结论：≥3分 → 可分批关注；1–2分 → 持有观察；≤0分 → 谨慎观望。
+    """
+    s = 0
+    if pos is not None:
+        if pos <= 35:
+            s += 1
+        elif pos >= 75:
+            s -= 1
+    if pe is not None and pe > 0:
+        if pe <= 20:
+            s += 1
+        elif pe >= 35:
+            s -= 1
     if div is not None and div >= 2.5:
-        score += 1
+        s += 1
     if main_inflow is not None and main_inflow > 0:
-        score += 1
-    if score >= 3:
+        s += 1
+    if score is not None:
+        if score >= 60:
+            s += 2
+        elif score >= 45:
+            s += 1
+        elif score < 25:
+            s -= 1
+    if s >= 3:
         return 0
-    if score <= 0:
+    if s <= 0:
         return 2
     return 1
 
 
-def _build_generic_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], div: Optional[float], main_inflow: Optional[float], north_pct: Optional[float]) -> Dict[str, Any]:
-    signal = _build_signal(pos, pe, div, main_inflow)
+def _build_signal_us(pos: Optional[float], pe: Optional[float], div: Optional[float], score: Optional[int]) -> int:
+    """美股「是否推荐入手」信号：复用通用 _build_signal，叠加巴菲特综合评分质量修正。"""
+    return _build_signal(pos, pe, div, score=score, main_inflow=None)
+
+
+def _build_generic_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], div: Optional[float], main_inflow: Optional[float], north_pct: Optional[float], score: Optional[int] = None) -> Dict[str, Any]:
+    signal = _build_signal(pos, pe, div, score=score, main_inflow=main_inflow)
     suggest = "可分批关注" if signal == 0 else "持有观察" if signal == 1 else "谨慎观望"
     pe_text = "亏损或暂缺" if pe is None or pe <= 0 else f"PE {pe:.1f}"
     pos_text = "52周位置暂缺" if pos is None else f"52周分位 {pos:.0f}%"
@@ -303,8 +336,8 @@ def _build_generic_texts(name: str, sector_key: str, pe: Optional[float], pos: O
     }
 
 
-def _build_generic_hk_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], div: Optional[float], south_pct: Optional[float]) -> Dict[str, Any]:
-    signal = _build_signal(pos, pe, div, None)
+def _build_generic_hk_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], div: Optional[float], south_pct: Optional[float], score: Optional[int] = None) -> Dict[str, Any]:
+    signal = _build_signal(pos, pe, div, score=score)
     suggest = "可分批关注" if signal == 0 else "持有观察" if signal == 1 else "谨慎观望"
     pe_text = "亏损或暂缺" if pe is None or pe <= 0 else f"PE {pe:.1f}"
     pos_text = "52周位置暂缺" if pos is None else f"52周分位 {pos:.0f}%"
@@ -321,6 +354,34 @@ def _build_generic_hk_texts(name: str, sector_key: str, pe: Optional[float], pos
         "summary_idea": f"操作思路：{suggest}，{south_text}；{div_text}。单只标的建议不超过组合的 15%-20%，并分散行业与风格。",
         "trend": f"{name} 处于 {pos_text} 区间，建议结合估值位置、区间涨跌与南向持股变化做跟踪。",
         "capital": f"{south_text}；{div_text}。",
+        "risks": SECTOR_RISK_TEXT.get(sector_key, ["行业景气波动", "估值回撤风险", "市场风格切换风险"]),
+    }
+
+
+def _fetch_us_hist_rows(code: str, trade_date: str) -> List[Dict[str, Any]]:
+    payload = _load_us_hist_cache(trade_date)
+    item = (payload.get("items") or {}).get(code) or {}
+    return list(item.get("rows") or [])
+
+
+def _build_generic_us_texts(name: str, sector_key: str, pe: Optional[float], pos: Optional[float], div: Optional[float], score: Optional[int] = None) -> Dict[str, Any]:
+    """美股通用文案：无北向/南向，成交额/52周分位为收盘口径锚点。"""
+    signal = _build_signal(pos, pe, div, score=score)
+    suggest = "可分批关注" if signal == 0 else "持有观察" if signal == 1 else "谨慎观望"
+    pe_text = "亏损或暂缺" if pe is None or pe <= 0 else f"PE {pe:.1f}"
+    pos_text = "52周位置暂缺" if pos is None else f"52周分位 {pos:.0f}%"
+    div_text = "股息率暂缺" if div is None else f"股息率 {_fmt_pct(div)}"
+    sector_cn = {"consumer": "消费", "healthcare": "医药", "manufacturing": "制造",
+                  "tech": "科技", "finance": "金融", "resource": "资源", "cycle": "周期"}.get(sector_key, "所属")
+    return {
+        "signal": signal,
+        "suggest": suggest,
+        "summary": f"{name} 当前以 {pe_text}、{pos_text} 为核心跟踪锚点，{div_text}，成交额为收盘口径。",
+        "summary_moat": f"护城河：{name} 在{sector_cn}领域具备规模与品牌壁垒，盈利质量相对稳定。",
+        "summary_trend": f"行业趋势：{name} 处于 {pos_text}，需结合行业景气与估值位置跟踪。",
+        "summary_idea": f"操作思路：{suggest}，成交额为收盘口径；{div_text}。单只标的建议不超过组合的 15%-20%，并分散行业与风格。",
+        "trend": f"{name} 处于 {pos_text} 区间，建议结合估值位置与成交活跃度做分批观察。",
+        "capital": f"成交额为收盘口径；{pos_text}。",
         "risks": SECTOR_RISK_TEXT.get(sector_key, ["行业景气波动", "估值回撤风险", "市场风格切换风险"]),
     }
 
@@ -395,11 +456,12 @@ def _build_ashare_page(trade_date: str) -> Dict[str, Any]:
         fin3 = financial.get("fin3") or []
         fin3_annual = [f for f in fin3 if f.get("annual")]
 
-        generated = _build_generic_texts(meta["zh"], meta["sector"], _to_float(spot.get("市盈率-动态")), hist_stats.get("pos"), div_yield, flow.get("main_net_in"), north.get("north_pct"))
+        pe_dynamic = _to_float(spot.get("市盈率-动态"))
         score, score_parts = _compute_score(
-            financial.get("roe"), _to_float(spot.get("市盈率-动态")), div_yield,
+            financial.get("roe"), pe_dynamic, div_yield,
             financial.get("liab"), hist_stats.get("pos"), financial.get("margin"),
         )
+        generated = _build_generic_texts(meta["zh"], meta["sector"], pe_dynamic, hist_stats.get("pos"), div_yield, flow.get("main_net_in"), north.get("north_pct"), score)
         build = _compute_build(
             price, hist_stats.get("w52l"), hist_stats.get("w52h"), hist_stats.get("pos"),
             _to_float(spot.get("市盈率-动态")), financial.get("eps"), last_div, div_yield,
@@ -530,6 +592,12 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
         fin_analysis = _fetch_hk_financial_analysis(code, trade_date)
         dividends = _fetch_hk_dividends(code, trade_date)
         southbound = south_map.get(code, {})
+        score, score_parts = _compute_score_hk(
+            fin_analysis.get("roe") if fin_analysis.get("roe") is not None else fin.get("roe"),
+            fin.get("pe"), fin.get("div"),
+            fin_analysis.get("liab"), hist_stats.get("pos"), fin_analysis.get("margin"),
+            fin.get("pb"),
+        )
         generated = _build_generic_hk_texts(
             base["zh"],
             base["sector"],
@@ -537,6 +605,7 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
             hist_stats.get("pos"),
             fin.get("div"),
             southbound.get("south_pct"),
+            score,
         )
         stock_issues = []
         for issue_text in [
@@ -548,13 +617,6 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
         ]:
             if issue_text:
                 stock_issues.append(issue_text)
-
-        score, score_parts = _compute_score_hk(
-            fin_analysis.get("roe") if fin_analysis.get("roe") is not None else fin.get("roe"),
-            fin.get("pe"), fin.get("div"),
-            fin_analysis.get("liab"), hist_stats.get("pos"), fin_analysis.get("margin"),
-            fin.get("pb"),
-        )
 
         price = _to_float(hist_last.get("收盘")) or _to_float(spot.get("最新价"))
         hk_div_yield = fin.get("div")
@@ -644,6 +706,185 @@ def _build_hk_page(trade_date: str) -> Dict[str, Any]:
     return {"meta": meta, "sectors": base_data["sectors"], "stocks": stocks}
 
 
+def _build_us_page(trade_date: str) -> Dict[str, Any]:
+    """美股个股走势页组装：复用港股同构页面 JSON（模块1-6 与弹窗一致），数据来自美股 fetcher。
+
+    美股惯例：涨绿跌红（由 renderer 的 .market-us 处理）；无北向/南向持股；
+    分红数据美股端暂无可用源，按项目「缺失不补造」原则优雅降级为"—"。
+    """
+    base_data = _load_us_base_data()
+    base_stocks = {str(item["code"]).upper(): item for item in base_data["stocks"]}
+    spot_map = _load_us_spot(trade_date)
+    hist_payload = _load_us_hist_cache(trade_date)
+    hist_warning = _build_aggregate_warning(hist_payload, "美股历史行情")
+    fin_payload = _load_us_financials(trade_date)
+    fin_warning = _build_aggregate_warning(fin_payload, "美股财务分析")
+    fin_map = (fin_payload.get("items") or {})
+    div_map = _load_us_dividends(trade_date)
+    stocks: List[Dict[str, Any]] = []
+
+    for code, base in base_stocks.items():
+        spot = spot_map.get(code, {})
+        hist_rows = _fetch_us_hist_rows(code, trade_date)
+        hist_stats = _compute_hist_stats(hist_rows)
+        hist_last = _latest_hist_row(hist_rows)
+        prev_close = _prev_close_from_hist(hist_rows)
+        fin = fin_map.get(code, {}) or {}
+        # 股息率 = TTM每股分红 ÷ 东财现价 ×100；yfinance 取 TTM 分红(稳)，现价用 spot(稳)
+        _spot_price = _to_float(spot.get("最新价"))
+        _ttm_div = div_map.get(code, {}).get("ttm_div")
+        div = round(_ttm_div / _spot_price * 100, 2) if (_ttm_div and _spot_price) else None
+        generated = _build_generic_us_texts(
+            base["zh"],
+            base["sector"],
+            _to_float(spot.get("市盈率-动态")),
+            hist_stats.get("pos"),
+            div,
+        )
+        stock_issues = []
+        for issue_text in [
+            _build_issue_text("历史行情", None if hist_rows else "公开接口返回空数据"),
+            _build_issue_text("美股财务分析", fin.get("issue")),
+        ]:
+            if issue_text:
+                stock_issues.append(issue_text)
+
+        price = _to_float(hist_last.get("收盘")) or _to_float(spot.get("最新价"))
+        pe = _to_float(spot.get("市盈率-动态"))
+        pb = _to_float(spot.get("市净率"))
+        roe = fin.get("roe")
+        margin = fin.get("margin")
+        liab = fin.get("liab")
+        eps = fin.get("eps")
+        fin3_annual = fin.get("fin3_annual") or []
+        pos = hist_stats.get("pos")
+
+        # 美股有 EPS/负债率，复用 A股综合评分（ROE30/估值25/分红15/财务15/护城河15）；
+        # 股息率来自 yfinance TTM 分红 ÷ 东财现价，div 非 None 时分红项正常计分。
+        score, score_parts = _compute_score(roe, pe, div, liab, pos, margin)
+        # 股息率达标奖励：>= US_DIVIDEND_THRESHOLD 额外 +1 分（推荐入手加分）
+        div_bonus = 0
+        if div is not None and div >= US_DIVIDEND_THRESHOLD:
+            div_bonus = 1
+            score = min(score + 1, 100)
+            score_parts = dict(score_parts)
+            score_parts["div_bonus"] = 1
+
+        # 美股「是否推荐入手」结论：用美股专用信号，把巴菲特综合评分纳入质量修正，
+        # 避免只看 pos/PE/div 导致高估值位的优质龙头全部被打成「谨慎观望」。
+        signal_us = _build_signal_us(pos, pe, div, score)
+        suggest_us = "可分批关注" if signal_us == 0 else "持有观察" if signal_us == 1 else "谨慎观望"
+        generated["signal"] = signal_us
+        generated["suggest"] = suggest_us
+        div_text = "股息率暂缺" if div is None else f"股息率 {_fmt_pct(div)}"
+        generated["summary_idea"] = (
+            f"操作思路：{suggest_us}，成交额为收盘口径；{div_text}。"
+            "单只标的建议不超过组合的 15%-20%，并分散行业与风格。"
+        )
+
+        # 建仓测算：美股有 EPS，走 A股 EPS 分档路径（三档基于 52 周区间 + 现价）；
+        # 无每股分红 → 三档 dy 为 None，目标价以 PE 视角给出。
+        build = _compute_build(
+            price, hist_stats.get("w52l"), hist_stats.get("w52h"), pos,
+            pe, eps, None, None,
+        )
+        defense = _compute_defense(fin3_annual)
+
+        mkt_raw = _to_float(spot.get("总市值"))
+        amount_raw = _to_float(hist_last.get("成交额")) if _to_float(hist_last.get("成交额")) is not None else _to_float(spot.get("成交额"))
+        turn = _to_float(hist_last.get("换手率")) if _to_float(hist_last.get("换手率")) is not None else _to_float(spot.get("换手率"))
+        open_ = _to_float(hist_last.get("开盘")) or _to_float(spot.get("今开"))
+        prev = prev_close if prev_close is not None else _to_float(spot.get("昨收"))
+
+        stocks.append(
+            {
+                **base,
+                "market": "us",
+                "exchange": "US",
+                "build": build,
+                "price": price,
+                "chg": _to_float(hist_last.get("涨跌幅")) if _to_float(hist_last.get("涨跌幅")) is not None else _to_float(spot.get("涨跌幅")),
+                "change": _to_float(hist_last.get("涨跌额")) if _to_float(hist_last.get("涨跌额")) is not None else _to_float(spot.get("涨跌额")),
+                "pe": pe,
+                "pb": pb,
+                "div": div,
+                "mkt_raw": mkt_raw,
+                "mkt": _fmt_market_cap(mkt_raw) if mkt_raw is not None else None,
+                "open": open_,
+                "prev": prev,
+                "amount_raw": amount_raw,
+                "amount": _fmt_yi(amount_raw),
+                "turn": turn,
+                "w52l": hist_stats.get("w52l"),
+                "w52h": hist_stats.get("w52h"),
+                "pos": pos,
+                "chg5": hist_stats.get("chg5"),
+                "chg20": hist_stats.get("chg20"),
+                "chg60": hist_stats.get("chg60"),
+                "ytd": hist_stats.get("ytd"),
+                "roe": roe,
+                "margin": margin,
+                "liab": liab,
+                "eps": eps,
+                "fin3_annual": fin3_annual,
+                "fin3": fin3_annual,
+                "financial_report_year": None,
+                "financial_report_period": None,
+                "financial_source": fin.get("source"),
+                "financial_as_of": fin.get("as_of"),
+                "div5": [],
+                "div_years": [],
+                "div_ttm": None,
+                "dividend_source": None,
+                "dividend_as_of": None,
+                "main_inflow": None,
+                "north_pct": None,
+                "south": None,
+                "south_pct": None,
+                "south_shares": None,
+                "south_date": None,
+                "history_as_of": trade_date,
+                "signal": generated["signal"],
+                "capital": generated["capital"],
+                "trend": generated["trend"],
+                "suggest": generated["suggest"],
+                "summary": generated["summary"],
+                "summary_moat": generated["summary_moat"],
+                "summary_trend": generated["summary_trend"],
+                "summary_idea": generated["summary_idea"],
+                "risks": base.get("risks") or generated["risks"],
+                "defense": defense,
+                "score": score,
+                "score_parts": score_parts,
+                "data_issues": stock_issues,
+            }
+        )
+
+    meta = dict(base_data["meta"])
+    meta.update(
+        {
+            "market_code": "us",
+            "tag": f"静态收盘快照 · 非实时 · {trade_date}",
+            "date": f"非实时页面：{trade_date} 收盘快照",
+            "databadge": "⚠️ 数据口径：本页仅展示收盘后的静态结果；价格、估值、财务为公开数据整理，缺失字段直接显示“—”。美股惯例：涨绿跌红。",
+            "modal_databadge": "⚠️ 本页为静态收盘快照：价格、涨跌、成交额、市值、估值均对应收盘口径；财务取自东方财富 F10 年报口径；分红数据美股端暂无可用源、直接显示“—”。",
+            "disclaimer": "⚠️ 免责声明：页面仅做公开数据整理与展示，不构成投资建议。行业分类与风险提示为静态模板配置；价格、估值、财务为运行时实时公开数据。",
+            "footer": f"{meta.get('title', '美股二级行业个股走势分析')} · 静态收盘快照 · {trade_date}",
+            "snap_iso": trade_date,
+            "currency_unit": "美元",
+            "money_unit": "亿美元",
+            "flow_label": "成交额",
+            "holding_label": "无互通持股",
+            "holding_pct_label": "无互通持股",
+            "show_roster": True,
+            "roster_title": "ROE 分层观察名单（美股）",
+            "roster_note": "若东方财富 F10 年报可得，则按最近可取 ROE 分层展示；缺失则不强行补值。",
+            "fetch_warnings": [item for item in [hist_warning, fin_warning] if item],
+        }
+    )
+    return {"meta": meta, "sectors": base_data["sectors"], "stocks": stocks}
+
+
 def collect_pages(data_date: Optional[str] = None, market: str = "all") -> Dict[str, Dict[str, Any]]:
     trade_date = data_date or detect_trade_date(market)
     pages: Dict[str, Dict[str, Any]] = {}
@@ -651,6 +892,8 @@ def collect_pages(data_date: Optional[str] = None, market: str = "all") -> Dict[
         pages["ashare"] = _build_ashare_page(trade_date)
     if market in {"all", "hk"}:
         pages["hk"] = _build_hk_page(trade_date)
+    if market in {"all", "us"}:
+        pages["us"] = _build_us_page(trade_date)
     return pages
 
 
@@ -668,13 +911,18 @@ def write_page_jsons(pages: Dict[str, Dict[str, Any]], out_dir: Optional[str] = 
         if out_dir:
             write_json(path, {"_meta": {"cache_scope": "page_data", "market": "hk", "data_date": pages["hk"]["meta"].get("snap_iso")}, "data": pages["hk"]})
         written.append(path)
+    if "us" in pages:
+        path = os.path.join(out_dir, "stocktrend_us.json") if out_dir else save_data_json("stocktrend_us.json", pages["us"], source=pages["us"]["meta"].get("footer"), tags={"market": "us", "data_date": pages["us"]["meta"].get("snap_iso")})
+        if out_dir:
+            write_json(path, {"_meta": {"cache_scope": "page_data", "market": "us", "data_date": pages["us"]["meta"].get("snap_iso")}, "data": pages["us"]})
+        written.append(path)
     return written
 
 
 def main() -> Dict[str, Dict[str, Any]]:
     parser = argparse.ArgumentParser(description="stocktrend 数据加工脚本：请求(fetcher) + 加工(本模块)拆分 JSON 产物，并汇总生成 stocktrend 页面 JSON")
     parser.add_argument("--date", help="交易日 YYYY-MM-DD，默认使用共享交易日判断逻辑")
-    parser.add_argument("--market", choices=["all", "ashare", "hk"], default="all", help="输出市场，默认 all")
+    parser.add_argument("--market", choices=["all", "ashare", "hk", "us"], default="all", help="输出市场，默认 all")
     parser.add_argument("--out", help="输出目录，默认 <项目根>/build/data")
     args = parser.parse_args()
 

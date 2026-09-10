@@ -363,6 +363,14 @@ def _fetch_hist_rows_direct(market: str, code: str, start: str, end: str) -> Lis
     end_date = dt.datetime.strptime(end, "%Y%m%d").date()
     for row in df.to_dict("records"):
         row_date = row.get("date")
+        # AKShare 可能返回 pandas.Timestamp，统一转 datetime.date 后再比较过滤
+        try:
+            if isinstance(row_date, dt.datetime):
+                row_date = row_date.date()
+            elif not isinstance(row_date, dt.date):
+                row_date = dt.datetime.strptime(str(row_date)[:10], "%Y-%m-%d").date()
+        except Exception:
+            continue
         if not row_date or row_date < start_date or row_date > end_date:
             continue
         turnover = _to_float(row.get("turnover"))
@@ -946,6 +954,264 @@ def _fetch_ashare_main_flow(codes: List[str], trade_date: str) -> Dict[str, Dict
         code = str(row.get("code") or "").zfill(6)
         payload[code] = {"main_net_in": _to_float(row.get("main_net_in")), "pct": _to_float(row.get("pct"))}
     return payload
+
+
+# =====================================================================
+# 美股（US）数据请求层
+# 分层约束：本段只发起外部请求（东方财富 push2delay / 新浪 / 东方财富 F10），
+# 不在本段做任何纯本地加工（聚合、涨跌家数推导、评分、建仓测算等一律在 processor）。
+# 数据源与项目美股资金流页一致：东方财富延迟行情主机（push2delay）取报价，
+# 新浪取美股日线历史，东方财富 F10（emweb）取年报主要财务指标。
+# =====================================================================
+
+def _load_us_base_data() -> Dict[str, Any]:
+    from stocktrend.stocktrend_static_data import US_BASE_DATA
+    return US_BASE_DATA
+
+
+# 东方财富美股 secid 交易所前缀：NASDAQ=105 / NYSE=106 / AMEX=125
+_US_NYSE_CODES = {
+    "BAC", "BRK.B", "CAT", "CVX", "GS", "JPM", "KO", "LMT", "MA", "MCD", "MS",
+    "NEE", "PEP", "PFE", "PG", "PM", "SLB", "TSM", "UPS", "V", "WMT", "XOM",
+    "DUK", "UNH", "LIN", "HD", "NKE", "AMT", "PLD",
+}
+
+
+def _us_secids_for(codes: List[str]) -> List[str]:
+    """为给定代码生成东财美股 secid（按交易所前缀区分）。"""
+    out: List[str] = []
+    for code in codes:
+        c = str(code).upper()
+        prefix = "106." if c in _US_NYSE_CODES else "105."
+        out.append(f"{prefix}{c}")
+    return out
+
+
+def _fetch_us_spot_rows_direct(codes: List[str]) -> List[Dict[str, Any]]:
+    """东方财富延迟行情主机批量拉美股报价（复用 stocktrend 既有 ulist 通道，push2delay 在沙箱可达）。
+
+    返回行字段对齐 A/HK spot：代码/名称/最新价/涨跌幅/涨跌额/成交量/成交额/振幅/换手率/
+    市盈率-动态/最高/最低/今开/昨收/总市值/市净率/GICS（f100）。
+    """
+    secids = _us_secids_for(codes)
+    payload = _http_json(
+        "https://push2delay.eastmoney.com/api/qt/ulist.np/get",
+        {
+            "fields": "f12,f14,f2,f3,f4,f5,f6,f7,f8,f9,f15,f16,f17,f18,f20,f23,f100",
+            "secids": ",".join(secids),
+            "fltt": "2",
+            "invt": "2",
+            "np": "1",
+        },
+    )
+    rows = []
+    diff = (payload or {}).get("data") or {}
+    diff = diff.get("diff") or {}
+    items = list(diff.values()) if isinstance(diff, dict) else diff
+    for row in items:
+        code = str(row.get("f12") or "").strip().upper()
+        if not code:
+            continue
+        rows.append(
+            {
+                "代码": code,
+                "名称": row.get("f14"),
+                "最新价": _to_float(row.get("f2")),
+                "涨跌幅": _to_float(row.get("f3")),
+                "涨跌额": _to_float(row.get("f4")),
+                "成交量": _to_float(row.get("f5")),
+                "成交额": _to_float(row.get("f6")),
+                "振幅": _to_float(row.get("f7")),
+                "换手率": _to_float(row.get("f8")),
+                "市盈率-动态": _to_float(row.get("f9")),
+                "最高": _to_float(row.get("f15")),
+                "最低": _to_float(row.get("f16")),
+                "今开": _to_float(row.get("f17")),
+                "昨收": _to_float(row.get("f18")),
+                "总市值": _to_float(row.get("f20")),
+                "市净率": _to_float(row.get("f23")),
+                "GICS": str(row.get("f100") or "").strip() or None,
+            }
+        )
+    return rows
+
+
+def _load_us_spot(trade_date: str) -> Dict[str, Dict[str, Any]]:
+    codes = [str(item["code"]).upper() for item in _load_us_base_data()["stocks"]]
+    filename = f"stocktrend_us_spot_{trade_date}.json"
+    rows = _load_or_fetch_build(filename, lambda: _fetch_us_spot_rows_direct(codes))
+    return {str(row.get("代码") or "").upper(): row for row in rows}
+
+
+def _fetch_us_dividend_rows_direct(codes: List[str]) -> List[Dict[str, Any]]:
+    """雅虎财经(yfinance)拉美股 TTM 每股分红（近 400 天分红合计，单位原币）。
+
+    东财延迟主机 push2delay 对美股 f116 恒返回 "-"，实时主机 72.push2 对本地出口 IP 直接
+    RST；腾讯 gtimg / 新浪 / 百度估值等免费源均无美股股息率字段。经实测，yfinance 在非沙箱
+    网络下可稳定取到历史分红序列（t.dividends）。注意：yfinance 的 t.history 在沙箱外出时
+    偶发误报"possibly delisted"，故**只取分红序列、不取价**；股息率由 processor 用东财 spot
+    现价折算（price 已知且稳定）。不分红标的返回 ttm_div=None。
+    雅虎对共享 IP 有限流(429)，逐只带退避重试；全失败返回空列表，调用方降级为 div=None。
+    """
+    try:
+        import yfinance as yf
+    except Exception:
+        return []
+    import time as _time
+    import pandas as _pd
+
+    rows: List[Dict[str, Any]] = []
+    for code in codes:
+        ysym = str(code).replace(".", "-")  # AAPL->AAPL, BRK.B->BRK-B
+        ttm = None
+        for attempt in range(3):
+            try:
+                t = yf.Ticker(ysym)
+                divs = t.dividends
+                if divs is None or len(divs) == 0:
+                    break
+                last = divs.index[-1]
+                ttm = round(float(divs[divs.index > (last - _pd.Timedelta(days=400))].sum()), 4)
+                break
+            except Exception as e:
+                msg = str(e)
+                if "Rate limit" in msg or "429" in msg:
+                    _time.sleep(2 * (attempt + 1))  # 限流退避
+                    continue
+                break
+        rows.append({"代码": str(code).upper(), "ttm_div": ttm})
+    return rows
+
+
+def _load_us_dividends(trade_date: str) -> Dict[str, Dict[str, Any]]:
+    codes = [str(item["code"]).upper() for item in _load_us_base_data()["stocks"]]
+    filename = f"stocktrend_us_dividends_{trade_date}.json"
+    rows = _load_or_fetch_build(filename, lambda: _fetch_us_dividend_rows_direct(codes))
+    return {str(row.get("代码") or "").upper(): row for row in rows}
+
+
+def _fetch_us_hist_rows_direct(code: str, start: str, end: str) -> List[Dict[str, Any]]:
+    """新浪美股日线（stock_us_daily）。返回近 ~1 年日线用于 52 周区间/分位/区间涨跌。"""
+    ak = _get_akshare_client()
+    df = _safe_ak_call(f"{code} 美股历史行情", ak.stock_us_daily, symbol=code, adjust="")
+    if df is None or df.empty:
+        return []
+    rows: List[Dict[str, Any]] = []
+    start_date = dt.datetime.strptime(start, "%Y%m%d").date()
+    end_date = dt.datetime.strptime(end, "%Y%m%d").date()
+    for row in df.to_dict("records"):
+        row_date = row.get("date")
+        # AKShare 可能返回 pandas.Timestamp，统一转 datetime.date 后再比较过滤
+        try:
+            if isinstance(row_date, dt.datetime):
+                row_date = row_date.date()
+            elif not isinstance(row_date, dt.date):
+                row_date = dt.datetime.strptime(str(row_date)[:10], "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if not row_date or row_date < start_date or row_date > end_date:
+            continue
+        rows.append(
+            {
+                "日期": str(row_date),
+                "开盘": _to_float(row.get("open")),
+                "收盘": _to_float(row.get("close")),
+                "最高": _to_float(row.get("high")),
+                "最低": _to_float(row.get("low")),
+                "成交量": _to_float(row.get("volume")),
+                "成交额": None,
+                "振幅": None,
+                "涨跌幅": None,
+                "涨跌额": None,
+                "换手率": None,
+                "股票代码": code,
+            }
+        )
+    for index in range(1, len(rows)):
+        prev_close = rows[index - 1].get("收盘")
+        current_close = rows[index].get("收盘")
+        if prev_close not in (None, 0) and current_close is not None:
+            rows[index]["涨跌额"] = current_close - prev_close
+            rows[index]["涨跌幅"] = (current_close / prev_close - 1) * 100
+    return rows
+
+
+def _load_us_hist_cache(trade_date: str) -> Dict[str, Any]:
+    codes = [str(item["code"]).upper() for item in _load_us_base_data()["stocks"]]
+    filename = f"stocktrend_us_hist_{trade_date}.json"
+    cached = load_build_json(filename)
+    if cached is not None:
+        return cached
+    start = (dt.datetime.strptime(trade_date, "%Y-%m-%d") - dt.timedelta(days=420)).strftime("%Y%m%d")
+    end = trade_date.replace("-", "")
+    items: Dict[str, Any] = {}
+    summary = {"requested": len(codes), "success": 0, "failed": 0}
+    error_reasons: List[str] = []
+    source = "新浪美股日线"
+    for code in codes:
+        rows = _fetch_us_hist_rows_direct(code, start, end)
+        issue = None if rows else "公开接口返回空数据"
+        if issue:
+            summary["failed"] += 1
+            error_reasons.append(issue)
+        else:
+            summary["success"] += 1
+        items[code] = _build_result_payload(source, trade_date, issue=issue, rows=rows)
+    payload = {"items": items, "summary": summary, "error_reasons": _dedupe_texts(error_reasons), "source": source}
+    save_build_json(filename, payload)
+    return payload
+
+
+def _fetch_us_financial_direct(symbol: str) -> Dict[str, Any]:
+    """东方财富 F10 美股年报主要指标（stock_financial_us_analysis_indicator_em, indicator=年报）。
+
+    提供 ROE_AVG（净资产收益率）/ GROSS_PROFIT_RATIO（销售毛利率）/ DEBT_ASSET_RATIO（资产负债率）/
+    BASIC_EPS（每股收益），并取最近 3 个年报构建 fin3_annual。
+    """
+    ak = _get_akshare_client()
+    df = _safe_ak_call(f"{symbol} 美股财务分析", ak.stock_financial_us_analysis_indicator_em, symbol=symbol, indicator="年报")
+    if df is None or df.empty:
+        return _build_result_payload("东方财富美股财务分析", "", issue="公开接口返回空数据")
+    rows = df.to_dict("records")
+    fin3: List[Dict[str, Any]] = []
+    for r in rows:
+        raw = str(r.get("REPORT_DATE") or "")
+        m = re.search(r"(\d{4})", raw)
+        if not m:
+            continue
+        year = int(m.group(1))
+        fin3.append({
+            "year": year,
+            "annual": True,
+            "roe": _to_float(r.get("ROE_AVG")),
+            "margin": _to_float(r.get("GROSS_PROFIT_RATIO")),
+            "liab": _to_float(r.get("DEBT_ASSET_RATIO")),
+            "eps": _to_float(r.get("BASIC_EPS")),
+            "ocfps": None,  # 东财美股年报主要指标不含每股经营现金流，留空由渲染层处理
+        })
+    fin3 = sorted(fin3, key=lambda x: x["year"], reverse=True)[:3]
+    latest = fin3[0] if fin3 else {}
+    return _build_result_payload(
+        "东方财富美股财务分析", "",
+        roe=latest.get("roe"),
+        margin=latest.get("margin"),
+        liab=latest.get("liab"),
+        eps=latest.get("eps"),
+        report_year=latest.get("year"),
+        fin3_annual=fin3,
+    )
+
+
+def _load_us_financials(trade_date: str) -> Dict[str, Any]:
+    codes = [str(item["code"]).upper() for item in _load_us_base_data()["stocks"]]
+    return _load_aggregate_by_code(
+        f"stocktrend_us_financials_{trade_date}.json",
+        codes,
+        "美股财务分析",
+        _fetch_us_financial_direct,
+        "东方财富美股财务分析",
+        trade_date,
+    )
 
 
 

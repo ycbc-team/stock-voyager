@@ -14,6 +14,7 @@ SITE_TABS = [
     {"key": "fundflow_hk", "label": "港股资金流", "href": "fundflow_hk.html"},
     {"key": "stocktrend_hk", "label": "港股个股", "href": "stocktrend_hk.html"},
     {"key": "fundflow_us", "label": "美股资金流", "href": "fundflow_us.html"},
+    {"key": "stocktrend_us", "label": "美股个股", "href": "stocktrend_us.html"},
 ]
 
 

@@ -653,3 +653,123 @@ HK_BASE_DATA = json.loads(r'''
   ]
 }
 ''')
+
+
+# —— 美股二级行业个股走势分析静态模板 ——
+# 个股名单取自外部链接（美股二级行业个股走势分析页）；
+# 二级行业分类优先参照项目美股资金流页的 GICS 二级行业映射（common/cache/us_gics_map.json），
+# 少数未覆盖标的（AMGN/CSCO/DUK/LMT/PM/TSM/BRK.B）按 GICS 标准补全。
+US_SECTORS = [
+    {"key": "cycle", "title": "大周期板块（能源 / 原材料 / 工业 / 公用事业 / 房地产）", "label": "周期", "color": "#ff8c42"},
+    {"key": "tech", "title": "大科技板块（信息技术 / 通信服务）", "label": "科技", "color": "#3fb950"},
+    {"key": "consumer", "title": "大消费板块（可选消费 / 日常消费 / 医疗保健）", "label": "消费", "color": "#f0c040"},
+    {"key": "finance", "title": "大金融板块（金融）", "label": "金融", "color": "#58a6ff"},
+]
+
+US_SECTOR_RISK = {
+    "cycle": [
+        "商品价格中枢波动",
+        "利率与汇率周期影响估值",
+        "周期股高位回撤速度较快",
+    ],
+    "tech": [
+        "技术迭代快、竞争格局变化快",
+        "高估值阶段波动更大",
+        "机构持仓拥挤时回撤更明显",
+    ],
+    "consumer": [
+        "消费需求恢复不及预期",
+        "渠道或品牌竞争加剧",
+        "高位估值阶段回撤放大",
+    ],
+    "finance": [
+        "宏观利率周期影响盈利",
+        "监管与政策环境变化",
+        "市场风格切换传导估值波动",
+    ],
+}
+
+# (code, zh, en, l1=GICS一级, l2=GICS二级, block)
+US_STOCK_DEFS = [
+    ("AAPL", "苹果", "Apple", "信息技术", "硬件设备", "tech"),
+    ("MSFT", "微软", "Microsoft", "信息技术", "软件服务", "tech"),
+    ("NVDA", "英伟达", "NVIDIA", "信息技术", "半导体", "tech"),
+    ("AVGO", "博通", "Broadcom", "信息技术", "半导体", "tech"),
+    ("ORCL", "甲骨文", "Oracle", "信息技术", "软件服务", "tech"),
+    ("CSCO", "思科", "Cisco", "信息技术", "通信设备", "tech"),
+    ("TSM", "台积电", "TSMC", "信息技术", "半导体", "tech"),
+    ("GOOGL", "谷歌-A", "Alphabet", "通信服务", "互联网媒体", "tech"),
+    ("META", "元", "Meta", "通信服务", "互联网媒体", "tech"),
+    ("NFLX", "奈飞", "Netflix", "通信服务", "互联网媒体", "tech"),
+    ("AMZN", "亚马逊", "Amazon", "可选消费", "电商零售", "consumer"),
+    ("HD", "家得宝", "Home Depot", "可选消费", "专业零售", "consumer"),
+    ("MCD", "麦当劳", "McDonald's", "可选消费", "餐饮旅游", "consumer"),
+    ("NKE", "耐克", "Nike", "可选消费", "耐用消费品", "consumer"),
+    ("TSLA", "特斯拉", "Tesla", "可选消费", "汽车", "consumer"),
+    ("KO", "可口可乐", "Coca-Cola", "日常消费", "食品饮料", "consumer"),
+    ("PEP", "百事", "PepsiCo", "日常消费", "食品饮料", "consumer"),
+    ("PG", "宝洁", "P&G", "日常消费", "家庭用品", "consumer"),
+    ("PM", "菲利普莫里斯", "Philip Morris", "日常消费", "食品饮料", "consumer"),
+    ("WMT", "沃尔玛", "Walmart", "日常消费", "零售", "consumer"),
+    ("AMGN", "安进", "Amgen", "医疗保健", "生物科技", "consumer"),
+    ("LLY", "礼来", "Eli Lilly", "医疗保健", "创新药", "consumer"),
+    ("PFE", "辉瑞", "Pfizer", "医疗保健", "制药", "consumer"),
+    ("UNH", "联合健康", "UnitedHealth", "医疗保健", "医疗保健服务", "consumer"),
+    ("BAC", "美国银行", "Bank of America", "金融", "银行", "finance"),
+    ("BRK.B", "伯克希尔", "Berkshire", "金融", "综合金融", "finance"),
+    ("GS", "高盛", "Goldman Sachs", "金融", "综合金融", "finance"),
+    ("JPM", "摩根大通", "JPMorgan", "金融", "银行", "finance"),
+    ("MA", "万事达", "Mastercard", "金融", "金融科技", "finance"),
+    ("MS", "摩根士丹利", "Morgan Stanley", "金融", "综合金融", "finance"),
+    ("V", "维萨", "Visa", "金融", "金融科技", "finance"),
+    ("CVX", "雪佛龙", "Chevron", "能源", "油气", "cycle"),
+    ("SLB", "斯伦贝谢", "Schlumberger", "能源", "油服", "cycle"),
+    ("XOM", "埃克森美孚", "ExxonMobil", "能源", "油气", "cycle"),
+    ("LIN", "林德", "Linde", "原材料", "化工", "cycle"),
+    ("SHW", "宣伟", "Sherwin-Williams", "原材料", "化工", "cycle"),
+    ("FCX", "自由港", "Freeport", "原材料", "金属矿业", "cycle"),
+    ("CAT", "卡特彼勒", "Caterpillar", "工业", "机械制造", "cycle"),
+    ("LMT", "洛克希德马丁", "Lockheed Martin", "工业", "航空航天", "cycle"),
+    ("UPS", "联合包裹", "UPS", "工业", "交通运输", "cycle"),
+    ("AMT", "美国电塔", "American Tower", "房地产", "REITs", "cycle"),
+    ("PLD", "普罗洛吉斯", "Prologis", "房地产", "REITs", "cycle"),
+    ("NEE", "新纪元能源", "NextEra", "公用事业", "电力", "cycle"),
+    ("DUK", "杜克能源", "Duke Energy", "公用事业", "电力", "cycle"),
+]
+
+_US_BORDER = {"tech": "green", "consumer": "yellow", "finance": "blue", "cycle": "orange"}
+
+
+def _build_us_base_data() -> dict:
+    stocks = []
+    for code, zh, en, l1, l2, block in US_STOCK_DEFS:
+        stocks.append({
+            "code": code,
+            "en": en,
+            "zh": zh,
+            "sector": block,
+            "l1": l1,
+            "l2": l2,
+            "border": _US_BORDER[block],
+            "risks": list(US_SECTOR_RISK[block]),
+        })
+    return {
+        "meta": {
+            "title": "美股二级行业个股走势分析",
+            "tag": "收盘快照 · 运行时生成",
+            "subtitle": "聚焦美股核心标的，按 GICS 二级行业分类，便于按估值、位置、财务与风险提示做盘后复盘。",
+            "date": "行情、估值、财务、分红等事实字段由运行时实时获取；美股惯例：涨绿跌红",
+            "databadge": "⚠️ 数据口径：本文件仅保留静态模板配置（行业分类、基础股票名单与风险提示）。行情、估值、财务、分红等动态字段不在此固化。",
+            "disclaimer": "⚠️ 免责声明：以上内容由 AI 基于公开数据与静态模板整理生成，仅供参考，不构成任何投资建议或个股推荐。行业分类、组合分组与风险提示为静态模板配置；价格、估值、财务、分红等事实字段以运行时实时数据为准。",
+            "footer": "美股二级行业个股走势分析 · 静态模板配置（行业分类 / 风险提示）",
+            "roster_title": "ROE 分层观察名单（美股）",
+            "roster_note": "ROE 为运行时可获取的最新公开口径；若缺失则不强行补值。",
+            "snap_iso": "",
+            "modal_databadge": "⚠️ 数据口径：本文件不再固化价格、估值、财务、分红等动态字段；页面展示时优先使用运行时实时公开数据。",
+        },
+        "sectors": US_SECTORS,
+        "stocks": stocks,
+    }
+
+
+US_BASE_DATA = _build_us_base_data()
