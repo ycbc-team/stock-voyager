@@ -4,7 +4,7 @@
 
 覆盖：
   - fundflow    A股/港股/美股资金流（collect_report_data / collect_report_data_hk / collect_report_data_us）
-  - stocktrend  A股/港股个股走势（collect_pages）
+  - stocktrend  A股/港股/美股个股走势（collect_pages）
 
 此文件是预览/开发改页面统一读取的【唯一真实数据源】，无需 mock。
 
@@ -68,6 +68,9 @@ def main() -> None:
     modules: dict = {}
     data: dict = {}
 
+    # 快照输出路径提前定义：funds_us 失败保留分支与 stocktrend 保留分支都要读它
+    out = os.path.join(ROOT, "build", "data", "snapshot.json")
+
     # ---- fundflow：A股 + 港股资金流 ----
     from fundflow.fundflow_processor import collect_report_data, collect_report_data_hk, collect_report_data_us
 
@@ -97,16 +100,15 @@ def main() -> None:
             data.setdefault("funds", {})["us"] = old_us
             modules["funds_us"] = f"failed→preserved(旧 {_old_date(out)})"
 
-    # ---- stocktrend：A股 + 港股个股走势 ----
-    # out 路径提前，便于保留旧 stocktrend 真实数据（避免预览断供）
-    out = os.path.join(ROOT, "build", "data", "snapshot.json")
+    # ---- stocktrend：A股 + 港股 + 美股个股走势 ----
+    # out 路径已在上方提前定义，便于保留旧 stocktrend 真实数据（避免预览断供）
 
     if not args.skip_stocktrend:
         from stocktrend.stocktrend_processor import collect_pages
 
         ok_s, pages = _safe("stocktrend", collect_pages, data_date, "all")
         if ok_s:
-            for mkt in ("ashare", "hk"):
+            for mkt in ("ashare", "hk", "us"):
                 if mkt in pages:
                     modules[f"stocktrend_{mkt}"] = "ok"
                     data.setdefault("stocktrend", {})[mkt] = pages[mkt]
@@ -118,22 +120,23 @@ def main() -> None:
             if old_st:
                 data["stocktrend"] = old_st
                 old_d = _old_date(out)
-                for mkt in ("ashare", "hk"):
+                for mkt in ("ashare", "hk", "us"):
                     modules[f"stocktrend_{mkt}"] = f"failed→preserved(旧 {old_d})"
             else:
                 modules["stocktrend_ashare"] = f"failed: {str(pages)[:200]}"
                 modules["stocktrend_hk"] = "failed"
+                modules["stocktrend_us"] = "failed"
     else:
         # 显式跳过：保留旧 stocktrend 真实数据（来自上次全量），仅刷新资金流
         old_st = _load_old_stocktrend(out)
         if old_st:
             data["stocktrend"] = old_st
             old_d = _old_date(out)
-            modules["stocktrend_ashare"] = f"preserved(旧 {old_d})"
-            modules["stocktrend_hk"] = f"preserved(旧 {old_d})"
+            for mkt in ("ashare", "hk", "us"):
+                modules[f"stocktrend_{mkt}"] = f"preserved(旧 {old_d})"
         else:
-            modules["stocktrend_ashare"] = "skipped(--skip-stocktrend, 无旧数据)"
-            modules["stocktrend_hk"] = "skipped(--skip-stocktrend, 无旧数据)"
+            for mkt in ("ashare", "hk", "us"):
+                modules[f"stocktrend_{mkt}"] = "skipped(--skip-stocktrend, 无旧数据)"
 
     if not data:
         raise SystemExit("[!] 所有模块抓取均失败，保留旧快照文件未改动。请检查网络/接口后重试。")

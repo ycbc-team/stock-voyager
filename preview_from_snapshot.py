@@ -57,7 +57,7 @@ def build_fundflow(data: dict) -> list:
 def build_stocktrend(data: dict) -> list:
     st = data.get("stocktrend", {})
     made: list = []
-    for mkt in ("ashare", "hk"):
+    for mkt in ("ashare", "hk", "us"):
         if mkt not in st:
             continue
         out = os.path.join(PREVIEW, f"stocktrend_{mkt}_preview.html")
