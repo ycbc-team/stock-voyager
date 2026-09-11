@@ -196,7 +196,7 @@ html, body {
 /* ── 统一内页顶部模块（资金流 / 个股走势 共 6 页共用，对齐站点 GitHub 深色语言）── */
 .page-hdr {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
-  gap: 16px 24px; padding: 22px 24px; margin-bottom: 16px; border-radius: 16px;
+  gap: 16px 24px; padding: 22px 24px; margin: 16px 0 16px; border-radius: 16px;
   border: 1px solid rgba(255,255,255,.08);
   background: linear-gradient(135deg, rgba(22,27,34,.96), rgba(19,28,44,.92));
   box-shadow: 0 10px 30px rgba(0,0,0,.28);
@@ -263,7 +263,7 @@ def render_page_header(
         '    </div>\n'
         '  </div>\n'
         '  <div class="ph-r">\n'
-        f'    <div class="ph-meta">数据日期 {escape(data_date)}（{escape(weekday)}）· 收盘</div>\n'
+        f'    <div class="ph-meta">数据日期 <b>{escape(data_date)}</b>（<b>{escape(weekday)}</b>）· 收盘</div>\n'
         f'    <div class="ph-meta">更新于 <b>{escape(generated_at)}</b> ｜ {escape(source_text)}</div>\n'
         f'    {scope}'
         '  </div>\n'

@@ -125,7 +125,7 @@ cd fundflow
 港股资金流**不再单独建文件**，而是与 A 股共用 `fundflow/` 下同一套 4 文件 + `report.css`，通过 `--market hk` 分支输出独立的 `fundflow_hk.html`（UI 模板约 95% 与 A 股一致，仅按 `market` 切换标题/口径/行业文案，并非「仅换标签」，申万 31 行业 vs 港股二级业务类别（约 32 类）、北向 vs 南向等是真实分支）。模式对齐 `stocktrend/`（一套代码出 A 股 / 港股 / 美股三个独立网页）。
 
 - `fundflow_data_fetcher.py`：文末追加港股抓取函数（`load_or_fetch_hk_index_snapshot` / `load_or_fetch_hk_stock_fundflow` / `load_or_fetch_southbound` / `fetch_hk_market_breadth`）
-- `fundflow_processor.py`：文末追加港股装配函数（`collect_report_data_hk` / `build_hk_sector` / `compute_hk_hotspots` / `generate_hk_verdict`），`write_report_json(..., market=...)` 按 market 选 `fundflow_hk.json` / `fundflow.json`；`build_hk_sector()` 按恒生二级业务类别（l2，约 32 类）聚合港股主力净流入
+- `fundflow_processor.py`：文末追加港股装配函数（`collect_report_data_hk` / `build_hk_sector` / `compute_hk_hotspots` / `generate_hk_verdict`），`write_report_json(..., market=...)` 按 market 选 `fundflow_hk.json` / `fundflow.json`；`build_hk_sector()` 按东财 `f100` 恒生二级行业（约 30+ 类）**全市场聚合**港股主力净流入
 - `fundflow_ui_renderer.py`：`write_html(path, result, market="ashare")` 单一模板，靠 `is_hk = market=="hk"` 分支标题/核心 KPI（恒生+恒科+国企 / 南向占比 / 港股行业净流入 / 港股涨跌家数）/ 行业面板标签 / 南北向跟踪整块 / 页脚口径
 - `fundflow_main.py`：`build_fundflow_report(..., market=...)` + `--market {ashare,hk}`
 
@@ -135,13 +135,13 @@ cd fundflow
 
 **数据源**：
 - 主要指数：腾讯 gtimg（`hkHSI` 恒生 / `hkHSTECH` 恒科 / `hkHSCEI` 国企 / `hkHSCCI` 红筹）
-- 个股主力净流入：东方财富 `push2delay` 全港股资金流排行（`fs=m:128+t:1..4`，按 f62 排序，净流入/流出各 TOP100 合并去重；单页封顶 100 条，故分两页取）
-- 港股行业分类：复用 `stocktrend/stocktrend_static_data.HK_BASE_DATA`（按 `l2` 聚合约 32 个恒生二级业务类别，顺序见 `_hk_l2_order()`，自然按 l1 分组排布）
+- 个股主力净流入：东方财富 `push2delay` clist 全港股资金流（`fs=m:128+t:3`，约 2610 只正股，按 f62 排序后翻页拉全量；单页封顶 100 条）
+- 港股行业分类：东方财富 clist `f100`（恒生二级行业口径，逐只随行情返回），**全市场约 2600 只聚合**，不再依赖 40 只静态样本
 - 南向（港股通）：东方财富数据中心 `RPT_MUTUAL_DEAL_HISTORY`（003/004/006 → 沪/深/合计成交额 + 净买入；**南向净买入公开披露，与北向不同**）
 - 港股全市场涨跌家数 / 总成交额：AKShare `stock_hk_spot_em`（与 A 股 `stock_zh_a_spot_em` 同款；港股无涨跌停板，故不取涨停/跌停池）
 
 **注意（数据范围）**：
-- 「港股二级行业主力净流入」面板按恒生二级业务类别（l2，约 32 类）展示，不再收敛为 4 大板块 / 12 个一级行业；`HK_BASE_DATA["stocks"]` 现已补齐到 40 只、覆盖全部约 32 个二级类别，故各二级行业均有标的、无「—」空板块。若需更全覆盖，可继续扩充 `HK_BASE_DATA` 或接入恒生综合行业全量映射。
+- 「港股二级行业主力净流入」面板按恒生二级业务类别（`f100`，约 30+ 类）展示，**资金规模为全市场口径**（约 2600 只正股全量聚合），与 A 股申万面板一致；每行 `n_members` 为该行业纳入聚合的个股家数，成员明细仅保留净额前 N 条（`members` 不参与聚合、仅供下钻）。
 - 「个股资金流排行」已是**全港股市场** TOP（非仅 11 只），与 A 股全市场口径一致。
 - 本沙箱代理可能拦截 AKShare `stock_hk_spot_em`，届时「港股涨跌家数」显示「暂不可用」；A 股个股资金流 AKShare 失败会自动回退东方财富。
 

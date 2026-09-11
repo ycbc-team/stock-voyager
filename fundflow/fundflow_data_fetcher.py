@@ -61,7 +61,6 @@ from common.storage import save_build_json
 from common.storage import save_cache_json
 from common.storage import save_data_json
 from common.storage import write_json
-from stocktrend.stocktrend_static_data import HK_BASE_DATA
 
 INDICES = [
     ("上证指数", "1.000001"),
@@ -593,19 +592,6 @@ EM_HK_HEADERS = {
 }
 
 
-def hk_secid(code: str) -> str:
-    """港股在东方财富的 secid 格式：116.<5位代码>。"""
-    return f"116.{str(code).zfill(5)}"
-
-
-def _hk_universe_codes() -> List[str]:
-    return [str(s["code"]).zfill(5) for s in HK_BASE_DATA.get("stocks", [])]
-
-
-def _iter_chunks(items: List[str], size: int) -> List[List[str]]:
-    return [items[i:i + size] for i in range(0, len(items), size or 1)]
-
-
 def _fetch_hk_index_snapshot_payload() -> Dict[str, Any]:
     want_by_name = {name: gt for name, gt in HK_INDICES}
     codes = ",".join(gt for _, gt in HK_INDICES)
@@ -643,117 +629,117 @@ def load_or_fetch_hk_index_snapshot(data_date: str) -> Dict[str, Any]:
     return _load_or_fetch_build(_build_filename("fundflow_hk_index", data_date), _fetch_hk_index_snapshot_payload)
 
 
-EM_HK_FUND_FLOW_FS = "m:128+t:3,m:128+t:4,m:128+t:1,m:128+t:2"
+# 个股资金流行结构 schema 版本：行字段结构变更（v2 新增 sector / pct 改百分数量纲）时 +1，
+# 使旧的同日缓存自动失效并重抓，避免新旧 schema 混用导致行业面板聚合为空。
+FUNDFLOW_ROW_SCHEMA = 2
 
 
-def _fetch_hk_stock_fundflow_rank_em() -> Tuple[List[Dict[str, Any]], str]:
-    """东方财富全港股资金流排行（按主力净流入 f62 排序）。
+def _fetch_hk_full_stock_fundflow() -> Tuple[List[Dict[str, Any]], str, int]:
+    """翻页拉全港股个股资金流（fs=m:128+t:3 主板+创业板普通股，约 2610 只），按东财行业(f100)全市场聚合。
 
-    东方财富 clist 接口服务端硬卡 pz=100/页（实测 pz=200/500/1000 均只返 100），
-    故分别取「净流入 TOP100」（po=1）与「净流出 TOP100」（po=0）两页合并去重。
-    该结果为「资金流绝对值最大」的约 200 只，用于个股资金流排行表；行业面板的全覆盖
-    另由 `load_or_fetch_hk_stock_fundflow` 合并 ulist 按代码批量结果保证。
+    服务端 pz 单页硬卡 100，故翻页拉全量；f100 为东财自带港股行业（恒生二级口径），
+    用于「港股行业主力净流入」全市场面板（不再依赖 40 只静态样本）。
+    f3 在 fltt=2 下已是真实涨跌幅百分数，直接采用；f100='-' 的为 ETF/非股票品种，过滤。
     """
-    fields = "f12,f14,f2,f3,f62"
+    fields = "f12,f14,f3,f62,f100"
     base = {
         "pz": "100", "np": "1", "fltt": "2", "invt": "2",
         "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fid": "f62",
-        "fields": fields, "fs": EM_HK_FUND_FLOW_FS,
+        "fields": fields, "fs": "m:128+t:3",
     }
     host = "https://push2delay.eastmoney.com"
     rows_by_code: Dict[str, Dict[str, Any]] = {}
-    for po in ("1", "0"):
-        params = {**base, "pn": "1", "po": po}
+    pn = 1
+    total: Optional[int] = None
+    total_pages: Optional[int] = None
+    fail_retries = 0
+    short_retries = 0
+    max_retries = 4
+    retry_sleep = 2.0
+    while True:
+        params = {**base, "pn": str(pn), "po": "1"}
         query = urllib.parse.urlencode(params)
         text = http_get(f"{host}/api/qt/clist/get?{query}", EM_HK_HEADERS, timeout=20, retries=3)
-        if not text:
-            continue
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        for row in diff_list((payload.get("data") or {})):
-            code = str(row.get("f12") or "").zfill(5)
-            if not code or code in rows_by_code:
+        rows: List[Dict[str, Any]] = []
+        ok = False
+        if text:
+            try:
+                payload = json.loads(text)
+                data = payload.get("data") or {}
+                if total is None:
+                    total_raw = data.get("total")
+                    total = int(total_raw) if isinstance(total_raw, (int, float)) else None
+                    if total is not None:
+                        total_pages = max(1, (total + 99) // 100)
+                diff = data.get("diff") or {}
+                rows = list(diff.values()) if isinstance(diff, dict) else diff
+                ok = bool(rows)
+            except json.JSONDecodeError:
+                ok = False
+        if not ok:
+            fail_retries += 1
+            if fail_retries >= max_retries:
+                if total_pages is not None and pn >= total_pages:
+                    break
+                pn += 1
+                fail_retries = 0
+                short_retries = 0
+                if pn > 60:  # 安全阀：约 6000 只上限
+                    break
+                time.sleep(retry_sleep)
                 continue
-            pct_raw = to_float(row.get("f3"))
-            rows_by_code[code] = {
-                "code": code,
-                "name": row.get("f14"),
-                "pct": pct_raw / 100 if pct_raw is not None else None,
-                "main_net_in": to_float(row.get("f62")),
-            }
-    rows = list(rows_by_code.values())
-    if not rows:
-        return [], "东方财富延迟行情主机港股排行接口暂不可用"
-    return rows, f"东方财富延迟行情主机全港股资金流排行（净流入/流出各 TOP100，覆盖 {len(rows)} 只）"
-
-
-def _fetch_hk_stock_fundflow_payload() -> Tuple[List[Dict[str, Any]], str]:
-    """回退路径：116.xxxxx 批量，仅覆盖静态标的池（HK_BASE_DATA）。"""
-    codes = _hk_universe_codes()
-    if not codes:
-        return [], "港股静态标的池为空，无法抓取个股资金流"
-    secids = [hk_secid(c) for c in codes]
-    rows_by_code: Dict[str, Dict[str, Any]] = {}
-    pending = list(secids)
-    for batch in _iter_chunks(pending, 80):
-        payload = em_get_direct(
-            FUND_FLOW_BATCH_HOST,
-            "/api/qt/ulist.np/get",
-            {
-                "fields": "f12,f14,f2,f3,f62",
-                "secids": ",".join(batch),
-                "fltt": "2",
-                "invt": "2",
-                "np": "1",
-            },
-            timeout=20,
-            retries=3,
-        )
-        if not payload:
+            time.sleep(retry_sleep)
             continue
-        for row in diff_list(payload.get("data") or {}):
+        # 限流导致的「半页」：非末页却少于 100 行 → 重试该页
+        if total_pages is not None and pn < total_pages and len(rows) < 100:
+            short_retries += 1
+            if short_retries < max_retries:
+                time.sleep(retry_sleep)
+                continue
+            short_retries = 0
+        else:
+            short_retries = 0
+        fail_retries = 0
+        for row in rows:
             code = str(row.get("f12") or "").zfill(5)
             if not code:
                 continue
+            f100 = str(row.get("f100") or "").strip()
+            if not f100 or f100 == "-":
+                continue  # ETF / 非股票品种无行业，跳过
             pct_raw = to_float(row.get("f3"))
             rows_by_code[code] = {
                 "code": code,
                 "name": row.get("f14"),
-                "pct": pct_raw / 100 if pct_raw is not None else None,
+                "pct": pct_raw,  # 真实涨跌幅百分数，不再除 100
                 "main_net_in": to_float(row.get("f62")),
+                "sector": f100,  # 东财港股行业（恒生二级口径），全市场聚合用
             }
-    rows = [rows_by_code[c] for c in codes if c in rows_by_code]
+        if total_pages is not None and pn >= total_pages:
+            break
+        if total is not None and len(rows_by_code) >= total:
+            break
+        pn += 1
+        if pn > 60:
+            break
+    rows = list(rows_by_code.values())
     if not rows:
-        return [], "东方财富延迟行情主机 116.xxxxx 批量接口暂不可用"
-    return rows, f"东方财富延迟行情主机 116.xxxxx 批量资金流（覆盖 {len(rows)}/{len(codes)}）"
+        return [], "东方财富港股个股资金流接口暂不可用", 0
+    coverage = (len(rows_by_code) / total) if total else None
+    if coverage is not None and coverage < 0.9:
+        print(f"[warn] 港股全量抓取覆盖偏低：{len(rows_by_code)}/{total}（{coverage:.0%}），可能存在限流丢页", file=sys.stderr)
+    return rows, f"东方财富延迟行情主机全港股资金流（覆盖 {len(rows)} 只，按行业 f100 全市场聚合）", (total or len(rows))
 
 
 def load_or_fetch_hk_stock_fundflow(data_date: str, scope: str = "full") -> Tuple[List[Dict[str, Any]], str]:
     filename = f"stock_fundflow_hk_today_full_{data_date}.json"
     cached = load_build_json(filename)
-    if cached is not None:
+    if cached is not None and cached.get("schema") == FUNDFLOW_ROW_SCHEMA:
         return list(cached.get("rows") or []), cached.get("source", "build/full")
-    # 注意：东方财富 clist 接口 pz 服务端硬卡 100/页，无法靠调大 pz 扩量；
-    # 故采用「双路合并」：clist 全市场排行（看大单异动）+ ulist 按代码批量（保证 40 只代表股全覆盖）。
-    rows_by_code: Dict[str, Dict[str, Any]] = {}
-    sources: List[str] = []
-    rank_rows, rank_src = _fetch_hk_stock_fundflow_rank_em()
-    if rank_rows:
-        for r in rank_rows:
-            rows_by_code[r["code"]] = r  # clist 优先
-        sources.append(rank_src)
-    batch_rows, batch_src = _fetch_hk_stock_fundflow_payload()
-    if batch_rows:
-        for r in batch_rows:
-            rows_by_code.setdefault(r["code"], r)  # ulist 补全 clist 未覆盖的代表股
-        sources.append(batch_src)
-    rows = list(rows_by_code.values())
+    rows, source, _total = _fetch_hk_full_stock_fundflow()
     if not rows:
-        return [], "东方财富港股个股资金流接口暂不可用"
-    source = "；".join(sources) if sources else "东方财富港股个股资金流"
-    save_build_json(filename, {"data_date": data_date, "scope": scope, "source": source, "rows": rows})
+        return [], source or "东方财富港股个股资金流接口暂不可用"
+    save_build_json(filename, {"schema": FUNDFLOW_ROW_SCHEMA, "data_date": data_date, "scope": scope, "source": source, "rows": rows})
     return rows, source
 
 
@@ -933,7 +919,7 @@ def fetch_hk_market_breadth(data_date: str, stock_rows: Optional[List[Dict[str, 
 # 美股资金流抓取（镜像 A 股 / 港股，数据展示模块一一对应）
 #  - 主要指数        → 腾讯 gtimg（usINX 标普500 / usIXIC 纳斯达克 / usDJI 道琼斯 / usVIX 恐慌指数）
 #  - 个股主力净流入  → 东方财富 push2delay clist（fs=m:105+t:1，全美股排行，约 3500+ 只）
-#  - 美股 GICS 行业  → 复用 common/cache/us_gics_map.json 静态分类（镜像港股 HK_BASE_DATA 思路），由全美股资金流聚合
+#  - 美股 GICS 行业  → 东方财富 clist f100（GICS 一级行业口径，覆盖全市场约 5000 只）；
 #  - 全球资金面      → 腾讯 gtimg（usVIX 恐慌指数 / usCL WTI 原油；其余宏观序列 gtimg 无则优雅降级）
 #
 # 注意：东方财富美股 clist 在 fltt=2 下 f3 已是「真实涨跌幅百分数」（如 6.1 = +6.1%），
@@ -1105,7 +1091,7 @@ def _fetch_us_stock_fundflow_full() -> Tuple[List[Dict[str, Any]], str, int]:
     服务端 pz 单页硬卡 100，故翻页拉全量（约 5300 只 NYSE + NASDAQ 普通股），用于：
       - 个股资金流 TOP 排行（按 f62 取头尾）
       - 全市场涨跌家数（breadth，按 f3 推导）
-      - GICS 二级行业聚合（按 us_gics_map.json 静态 sub_industry 映射过滤后聚合）
+      - GICS 一级行业聚合（按东财自带 f100 全市场聚合，不再依赖 72 只 curated 样本）
     f3 在 fltt=2 下已是真实涨跌幅百分数（如 6.1 = +6.1%），直接采用，不再除 100。
     f100 为东财自带 GICS 一级行业字段；f100='-' 的为 ETF / 非股票品种，解析时过滤。
     """
@@ -1196,7 +1182,7 @@ def _fetch_us_stock_fundflow_full() -> Tuple[List[Dict[str, Any]], str, int]:
     rows = list(rows_by_code.values())
     if not rows:
         return [], "东方财富美股个股资金流接口暂不可用", 0
-    # 补全覆盖：clist 限流丢页时，用 ulist 直拉 72 只静态标的，保证 GICS 二级面板 100% 命中
+    # 核心龙头兜底：clist 限流丢页时，用 ulist 直拉 72 只静态标的，保证其出现于个股资金流池
     curated = _fetch_us_curated_via_ulist()
     added = 0
     for code, c in curated.items():
@@ -1215,12 +1201,12 @@ def _fetch_us_stock_fundflow_full() -> Tuple[List[Dict[str, Any]], str, int]:
 def load_or_fetch_us_stock_fundflow(data_date: str, scope: str = "full") -> Tuple[List[Dict[str, Any]], str]:
     filename = f"stock_fundflow_us_today_full_{data_date}.json"
     cached = load_build_json(filename)
-    if cached is not None:
+    if cached is not None and cached.get("schema") == FUNDFLOW_ROW_SCHEMA:
         return list(cached.get("rows") or []), cached.get("source", "build/full")
     rows, src, _total = _fetch_us_stock_fundflow_full()
     if not rows:
         return [], src or "东方财富美股个股资金流接口暂不可用"
-    save_build_json(filename, {"data_date": data_date, "scope": scope, "source": src, "rows": rows})
+    save_build_json(filename, {"schema": FUNDFLOW_ROW_SCHEMA, "data_date": data_date, "scope": scope, "source": src, "rows": rows})
     return rows, src
 
 
