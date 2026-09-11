@@ -655,11 +655,16 @@ def _fetch_hk_full_stock_fundflow() -> Tuple[List[Dict[str, Any]], str, int]:
     fail_retries = 0
     short_retries = 0
     max_retries = 4
-    retry_sleep = 2.0
+    retry_sleep = 1.0
+    # 硬墙钟上限：港股全市场翻页最多跑 8 分钟，超时即带着已抓数据退出，绝不卡死 GitHub runner
+    deadline = time.monotonic() + 480
     while True:
+        if time.monotonic() > deadline:
+            print(f"[warn] 港股全量抓取触及墙钟上限(8min)，以已抓 {len(rows_by_code)} 只退出", file=sys.stderr)
+            break
         params = {**base, "pn": str(pn), "po": "1"}
         query = urllib.parse.urlencode(params)
-        text = http_get(f"{host}/api/qt/clist/get?{query}", EM_HK_HEADERS, timeout=20, retries=3)
+        text = http_get(f"{host}/api/qt/clist/get?{query}", EM_HK_HEADERS, timeout=10, retries=2)
         rows: List[Dict[str, Any]] = []
         ok = False
         if text:
@@ -722,6 +727,7 @@ def _fetch_hk_full_stock_fundflow() -> Tuple[List[Dict[str, Any]], str, int]:
         pn += 1
         if pn > 60:
             break
+        time.sleep(0.25)  # 页面间节流，降低东财限流概率
     rows = list(rows_by_code.values())
     if not rows:
         return [], "东方财富港股个股资金流接口暂不可用", 0
@@ -736,10 +742,15 @@ def load_or_fetch_hk_stock_fundflow(data_date: str, scope: str = "full") -> Tupl
     cached = load_build_json(filename)
     if cached is not None and cached.get("schema") == FUNDFLOW_ROW_SCHEMA:
         return list(cached.get("rows") or []), cached.get("source", "build/full")
-    rows, source, _total = _fetch_hk_full_stock_fundflow()
+    rows, source, total = _fetch_hk_full_stock_fundflow()
     if not rows:
         return [], source or "东方财富港股个股资金流接口暂不可用"
-    save_build_json(filename, {"schema": FUNDFLOW_ROW_SCHEMA, "data_date": data_date, "scope": scope, "source": source, "rows": rows})
+    # 低覆盖（被限流截断）不写缓存，避免把残缺数据永久缓存、导致后续 run 永远不全
+    cov = (len(rows) / total) if total else None
+    if cov is None or cov >= 0.7:
+        save_build_json(filename, {"schema": FUNDFLOW_ROW_SCHEMA, "data_date": data_date, "scope": scope, "source": source, "rows": rows})
+    else:
+        print(f"[warn] 港股全量覆盖偏低({cov:.0%})，暂不写缓存，下次运行将重试", file=sys.stderr)
     return rows, source
 
 
@@ -1109,11 +1120,16 @@ def _fetch_us_stock_fundflow_full() -> Tuple[List[Dict[str, Any]], str, int]:
     fail_retries = 0
     short_retries = 0
     max_retries = 4
-    retry_sleep = 2.0
+    retry_sleep = 1.0
+    # 硬墙钟上限：美股全市场翻页最多跑 12 分钟，超时即带着已抓数据退出，绝不卡死 GitHub runner
+    deadline = time.monotonic() + 720
     while True:
+        if time.monotonic() > deadline:
+            print(f"[warn] 美股全量抓取触及墙钟上限(12min)，以已抓 {len(rows_by_code)} 只退出", file=sys.stderr)
+            break
         params = {**base, "pn": str(pn), "po": "1"}
         query = urllib.parse.urlencode(params)
-        text = http_get(f"{host}/api/qt/clist/get?{query}", EM_US_HEADERS, timeout=20, retries=3)
+        text = http_get(f"{host}/api/qt/clist/get?{query}", EM_US_HEADERS, timeout=10, retries=2)
         rows: List[Dict[str, Any]] = []
         ok = False
         if text:
@@ -1179,6 +1195,7 @@ def _fetch_us_stock_fundflow_full() -> Tuple[List[Dict[str, Any]], str, int]:
         pn += 1
         if pn > 80:  # 安全阀：m:105 约 6000+ 只，放宽到 80 页
             break
+        time.sleep(0.25)  # 页面间节流，降低东财限流概率
     rows = list(rows_by_code.values())
     if not rows:
         return [], "东方财富美股个股资金流接口暂不可用", 0
@@ -1203,10 +1220,15 @@ def load_or_fetch_us_stock_fundflow(data_date: str, scope: str = "full") -> Tupl
     cached = load_build_json(filename)
     if cached is not None and cached.get("schema") == FUNDFLOW_ROW_SCHEMA:
         return list(cached.get("rows") or []), cached.get("source", "build/full")
-    rows, src, _total = _fetch_us_stock_fundflow_full()
+    rows, src, total = _fetch_us_stock_fundflow_full()
     if not rows:
         return [], src or "东方财富美股个股资金流接口暂不可用"
-    save_build_json(filename, {"schema": FUNDFLOW_ROW_SCHEMA, "data_date": data_date, "scope": scope, "source": src, "rows": rows})
+    # 低覆盖（被限流截断）不写缓存，避免把残缺数据永久缓存、导致后续 run 永远不全
+    cov = (len(rows) / total) if total else None
+    if cov is None or cov >= 0.7:
+        save_build_json(filename, {"schema": FUNDFLOW_ROW_SCHEMA, "data_date": data_date, "scope": scope, "source": src, "rows": rows})
+    else:
+        print(f"[warn] 美股全量覆盖偏低({cov:.0%})，暂不写缓存，下次运行将重试", file=sys.stderr)
     return rows, src
 
 
