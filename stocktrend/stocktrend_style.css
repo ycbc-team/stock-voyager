@@ -1,6 +1,6 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; background:#0d1117; color:#c9d1d9; line-height:1.6; }
-.container { max-width: 1480px; margin: 0 auto; padding: 16px 0; }
+.container { max-width: 1480px; margin: 0 auto; padding: 0 0 16px; }
 .sector { border-radius:12px; padding:14px 0; margin-bottom:12px; }
 .sector h2 { font-size:15px; margin-bottom:10px; padding:0 14px; }
 .sector-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; padding:0 14px; }
@@ -186,7 +186,7 @@ body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; bac
   .yield-vs .yv-v { font-size:14px; }
   .hist-table { font-size:12px; }
 }
-@media (max-width:460px){ .container { padding:10px 0; } .stock-card { padding:8px 10px; } .metric-cards { grid-template-columns:repeat(2,1fr); } }
+@media (max-width:460px){ .container { padding:0 0 10px; } .stock-card { padding:8px 10px; } .metric-cards { grid-template-columns:repeat(2,1fr); } }
 .roe-section { background:linear-gradient(135deg,#0d1f0d 0%,#0d2818 100%); border:1px solid #1a3d2e; border-radius:16px; padding:18px 0; margin-bottom:14px; }
 .roe-section h2 { font-size:15px; margin-bottom:12px; color:#3fb950; padding:0 18px; }
 .roe-tier { display:flex; align-items:baseline; gap:10px; font-size:12px; padding:6px 18px; border-bottom:1px dashed #1a3d2e; }
@@ -199,13 +199,8 @@ body { font-family: -apple-system,'PingFang SC','Helvetica Neue',sans-serif; bac
 .market-us .stock-card .data .down { color:#f85149; }
 .market-us .kv .v.up { color:#3fb950; }
 
-/* 个股页模块边框顶到屏幕边缘（内部文字保持内边距），对齐资金流页满宽感 */
-.page-hdr { padding: 22px 0; }
-.page-hdr .ph-l { padding-left: 24px; }
-.page-hdr .ph-r { padding-right: 24px; }
-@media (max-width:720px){
-  .page-hdr .ph-l, .page-hdr .ph-r { padding: 0 18px; }
-}
+/* 个股页顶部模块统一使用 common/site_navigation.py 的共享 .page-hdr 样式，不再本地覆盖 */
+
 .market-us .kv .v.down { color:#f85149; }
 .market-us .metric-card .mc-s.up { color:#3fb950; }
 .market-us .metric-card .mc-s.down { color:#f85149; }

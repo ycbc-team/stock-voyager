@@ -54,9 +54,6 @@ from fundflow.fundflow_data_fetcher import load_or_fetch_sw_index_spot
 from fundflow.fundflow_data_fetcher import load_or_fetch_us_index_snapshot
 from fundflow.fundflow_data_fetcher import load_or_fetch_us_stock_fundflow
 from fundflow.fundflow_data_fetcher import load_or_fetch_us_global_liquidity
-from fundflow.fundflow_data_fetcher import _us_code_to_sector
-from fundflow.fundflow_data_fetcher import _us_sub_industry_order
-from stocktrend.stocktrend_static_data import HK_BASE_DATA
 
 
 SOURCE_SW = "AKShare 申万一级指数 + 东方财富个股资金流聚合"
@@ -512,69 +509,58 @@ def write_report_json(result: Dict[str, Any], out_dir: Optional[str] = None, mar
 # ════════════════════════════════════════════════════════════════════════════
 # 港股资金流加工 / 装配（镜像 A 股 collect_report_data，模块一一对应）
 # ════════════════════════════════════════════════════════════════════════════
-# 港股二级行业（l2）展示顺序：按 HK_BASE_DATA 中股票出现顺序去重得到，
-# 自然按恒生一级行业（l1）分组排布，不再收敛为 4 大板块 / 12 个一级行业。
-def _hk_l2_order() -> List[str]:
-    seen: List[str] = []
-    for s in HK_BASE_DATA.get("stocks", []):
-        l2 = s.get("l2") or s.get("l1") or ""
-        if l2 and l2 not in seen:
-            seen.append(l2)
-    return seen
+SOURCE_HK_SECTOR = "东方财富 push2 全港股资金流 + 东财行业(f100 恒生二级) 全市场聚合"
+
+# 每个行业行保留的成员明细条数（按 |主力净流入| 取前 N，仅供可能的页面下钻，不参与聚合）
+_HK_MEMBER_KEEP = 8
 
 
-SOURCE_HK_SECTOR = "东方财富 116.xxxxx 个股资金流 + 港股静态行业分类聚合"
+def build_hk_sector(stock_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """按东财 f100（恒生二级行业）聚合【全市场】港股个股主力净流入。
 
+    与旧实现的区别：不再用 40 只静态样本 + 本地 l2 映射，而是直接采用 fetcher 逐只带回的
+    `row["sector"]`（东财 f100，恒生二级行业名，如「软件服务」「银行」「药品及生物科技」），
+    对全市场约 2600 只正股全量聚合 —— 资金规模即「全市场口径」，与 A 股申万面板一致。
 
-def _hk_code_to_sector() -> Dict[str, Dict[str, str]]:
-    """code(5位) -> {sector, l1, l2} 映射，复用 stocktrend 港股分类。"""
-    mapping: Dict[str, Dict[str, str]] = {}
-    for s in HK_BASE_DATA.get("stocks", []):
-        code = str(s["code"]).zfill(5)
-        mapping[code] = {"sector": s.get("sector", ""), "l1": s.get("l1", ""), "l2": s.get("l2", ""), "zh": s.get("zh", "")}
-    return mapping
-
-
-def build_hk_sector(stock_rows: List[Dict[str, Any]], code_to_sector: Dict[str, Dict[str, str]]) -> List[Dict[str, Any]]:
-    """按港股二级行业（l2）聚合个股主力净流入（镜像 申万一级行业聚合）。
-
-    直接按恒生二级业务类别（约 31 类）分组展示，不再收敛为 4 大板块 / 12 个一级行业。
-    主力净流入 = 行业内个股 f62 求和；涨跌幅 = 行业内个股简单平均（无市值加权源，标注为简单平均）。
-    每个行业行的 zt / dt（top3 领涨 / 领跌个股）由 members 的 pct 推导（港股无涨跌停池，直接取板块内个股涨跌幅排序），
-    供「热点与异动板块」面板展示具体个股。
+    主力净流入 = 行业内个股 f62 求和；涨跌幅 = 行业内个股简单平均（无市值加权源，标注为简单平均）；
+    涨跌幅为「百分数」量纲（如 -2.64 表示 -2.64%），与 A 股 / 美股一致。
+    每个行业行的 zt / dt（top3 领涨 / 领跌个股）由成员 pct 推导，供「热点与异动板块」面板展示；
+    n_members 为该行业纳入聚合的个股家数（供页面展示覆盖广度）。
     """
     sums: Dict[str, float] = {}
     pcts: Dict[str, List[float]] = {}
     members: Dict[str, List[Dict[str, Any]]] = {}
     for row in stock_rows:
+        sec = str(row.get("sector") or "").strip()
+        if not sec or sec == "-":
+            continue  # ETF / 无行业品种
         code = str(row.get("code") or "").zfill(5)
-        meta = code_to_sector.get(code)
-        if not meta or not meta.get("l2"):
-            continue
-        sec = meta["l2"]
         sums[sec] = sums.get(sec, 0.0) + (to_float(row.get("main_net_in")) or 0.0)
         pct = to_float(row.get("pct"))
         if pct is not None:
             pcts.setdefault(sec, []).append(pct)
-        members.setdefault(sec, []).append({"name": row.get("name"), "code": code, "pct": pct, "main_net_in": to_float(row.get("main_net_in"))})
+        members.setdefault(sec, []).append(
+            {"name": row.get("name"), "code": code, "pct": pct, "main_net_in": to_float(row.get("main_net_in"))}
+        )
     out: List[Dict[str, Any]] = []
-    for key in _hk_l2_order():
-        if not members.get(key):
-            continue  # 该二级行业在当前资金流样本中无代表股（如不在 TOP200 排行），跳过以免出现空「—」面板
-        sec_members = members.get(key, [])
+    # 展示顺序：按主力净流入降序（渲染层「行业主力净流入」面板亦按净额重排，此处仅取稳定序，防止抖动）
+    for key in sorted(members, key=lambda k: (-(sums.get(k) or 0.0), k)):
+        sec_members = members[key]
         sec_pcts = pcts.get(key, [])
         avg_pct = sum(sec_pcts) / len(sec_pcts) if sec_pcts else None
         # 板块内 top3 领涨 / 领跌个股（按 pct 排序；pct 缺失排末尾），供热点面板展示
         with_pct = [m for m in sec_members if m.get("pct") is not None]
         zt = sorted(with_pct, key=lambda m: m["pct"], reverse=True)[:3]
         dt = sorted(with_pct, key=lambda m: m["pct"])[:3]
+        top_members = sorted(sec_members, key=lambda m: abs(m.get("main_net_in") or 0.0), reverse=True)[:_HK_MEMBER_KEEP]
         out.append(
             {
                 "key": key,
                 "name": key,
-                "pct": avg_pct,  # 行业简单平均涨跌幅
+                "pct": avg_pct,  # 行业简单平均涨跌幅（百分数）
                 "main_net_in": sums.get(key),
-                "members": sec_members,
+                "n_members": len(sec_members),  # 该行业纳入聚合的个股家数（全市场口径）
+                "members": top_members,  # 仅保留净额前 N，明细不参与聚合
                 "zt": zt,  # 板块内领涨个股 top3（数据驱动，零编造）
                 "dt": dt,  # 板块内领跌个股 top3
                 "source": SOURCE_HK_SECTOR,
@@ -674,8 +660,7 @@ def collect_report_data_hk(data_date: Optional[str] = None, topn: int = 10, verb
     if verbose:
         print(f"[+] 港股个股资金流: {len(stock_rows)} 条（{stock_source}）")
 
-    code_to_sector = _hk_code_to_sector()
-    hk_sector = build_hk_sector(stock_rows, code_to_sector)
+    hk_sector = build_hk_sector(stock_rows)
     if verbose:
         print(f"[+] 港股行业聚合: {len(hk_sector)} 个二级行业（{SOURCE_HK_SECTOR}）")
 
@@ -724,52 +709,56 @@ def collect_report_data_hk(data_date: Optional[str] = None, topn: int = 10, verb
 # ════════════════════════════════════════════════════════════════════════════
 # 美股资金流加工 / 装配（镜像 A 股 / 港股 collect_report_data，模块一一对应）
 # ════════════════════════════════════════════════════════════════════════════
-SOURCE_US_SECTOR = "东方财富 m:105+t:1,m:106+t:1 全美股资金流 + ulist 静态 72 只龙头补全 + GICS 二级行业样本聚合"
+SOURCE_US_SECTOR = "东方财富 push2 全美股资金流 + 东财行业(f100 GICS 一级) 全市场聚合"
+
+# 每个行业行保留的成员明细条数（按 |主力净流入| 取前 N，仅供可能的页面下钻，不参与聚合）
+_US_MEMBER_KEEP = 8
 
 
-def build_us_sector(stock_rows: List[Dict[str, Any]], code_to_sector: Dict[str, Dict[str, str]]) -> List[Dict[str, Any]]:
-    """按美股 GICS 二级行业聚合个股主力净流入（镜像 港股 build_hk_sector）。
+def build_us_sector(stock_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """按东财 f100（GICS 一级行业）聚合【全市场】美股个股主力净流入（镜像 港股 build_hk_sector）。
 
-    主力净流入 = 行业内个股 f62 求和；涨跌幅 = 行业内个股简单平均（无市值加权源）。
-    东财美股接口未提供 二级行业字段，故以 common/cache/us_gics_map.json 中 curated sub_industry 静态映射为准。
-    板块内 top3 领涨 / 领跌个股由 members 的 pct 推导，供「热点与异动板块」面板展示。
+    与旧实现的区别：不再用 72 只 curated 龙头 + us_gics_map.json 的二级行业静态映射，
+    而是直接采用 fetcher 逐只带回的 `row["sector"]`（东财 f100，GICS 一级行业名，如「信息技术」「医疗保健」），
+    对全市场约 5000 只 NYSE/NASDAQ 普通股全量聚合 —— 资金规模即「全市场口径」。
+
+    量纲：f3 在 fltt=2 下已是真实涨跌幅百分数（如 -1.02 表示 -1.02%），与 A 股 / 港股一致。
+    主力净流入 = 行业内个股 f62 求和；涨跌幅 = 行业内个股简单平均（无市值加权源，标注为简单平均）。
+    注：东财美股接口仅提供 GICS 一级字段，无二级，故本页为一级行业口径（比二级更粗但覆盖全市场）。
     """
     sums: Dict[str, float] = {}
     pcts: Dict[str, List[float]] = {}
     members: Dict[str, List[Dict[str, Any]]] = {}
     for row in stock_rows:
+        sec = str(row.get("sector") or "").strip()
+        if not sec or sec == "-":
+            continue  # ETF / 无行业品种
         code = str(row.get("code") or "").strip().upper()
-        meta = code_to_sector.get(code)
-        if not meta:
-            continue
-        # 优先按 二级行业聚合；缺失时退回一级 sector（理论上 curated 数据已补齐）
-        sec = meta.get("sub_industry") or meta.get("sector")
-        if not sec:
-            continue
         sums[sec] = sums.get(sec, 0.0) + (to_float(row.get("main_net_in")) or 0.0)
         pct = to_float(row.get("pct"))
         if pct is not None:
             pcts.setdefault(sec, []).append(pct)
         members.setdefault(sec, []).append(
-            {"name": meta.get("zh") or row.get("name"), "code": code, "pct": pct, "main_net_in": to_float(row.get("main_net_in"))}
+            {"name": row.get("name"), "code": code, "pct": pct, "main_net_in": to_float(row.get("main_net_in"))}
         )
     out: List[Dict[str, Any]] = []
-    for key in _us_sub_industry_order():
-        if not members.get(key):
-            continue
-        sec_members = members.get(key, [])
+    # 展示顺序：按主力净流入降序（渲染层亦按净额重排，此处仅取稳定序）
+    for key in sorted(members, key=lambda k: (-(sums.get(k) or 0.0), k)):
+        sec_members = members[key]
         sec_pcts = pcts.get(key, [])
         avg_pct = sum(sec_pcts) / len(sec_pcts) if sec_pcts else None
         with_pct = [m for m in sec_members if m.get("pct") is not None]
         zt = sorted(with_pct, key=lambda m: m["pct"], reverse=True)[:3]
         dt = sorted(with_pct, key=lambda m: m["pct"])[:3]
+        top_members = sorted(sec_members, key=lambda m: abs(m.get("main_net_in") or 0.0), reverse=True)[:_US_MEMBER_KEEP]
         out.append(
             {
                 "key": key,
                 "name": key,
                 "pct": avg_pct,
                 "main_net_in": sums.get(key),
-                "members": sec_members,
+                "n_members": len(sec_members),  # 该行业纳入聚合的个股家数（全市场口径）
+                "members": top_members,  # 仅保留净额前 N，明细不参与聚合
                 "zt": zt,
                 "dt": dt,
                 "source": SOURCE_US_SECTOR,
@@ -867,10 +856,9 @@ def collect_report_data_us(data_date: Optional[str] = None, topn: int = 10, verb
     if verbose:
         print(f"[+] 美股个股资金流: {len(stock_rows)} 条（{stock_source}）")
 
-    code_to_sector = _us_code_to_sector()
-    us_sector = build_us_sector(stock_rows, code_to_sector)
+    us_sector = build_us_sector(stock_rows)
     if verbose:
-        print(f"[+] 美股 GICS 行业聚合: {len(us_sector)} 个行业（{SOURCE_US_SECTOR}）")
+        print(f"[+] 美股 GICS 一级行业聚合: {len(us_sector)} 个行业（{SOURCE_US_SECTOR}）")
 
     breadth = compute_us_market_breadth(stock_rows)
     if verbose:

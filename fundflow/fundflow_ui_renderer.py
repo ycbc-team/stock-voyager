@@ -145,21 +145,25 @@ def write_html(path, result, market="ashare"):
     us = result.get("us_sector") or []
     gl = result.get("global_liquidity") or {}
 
+    # 全市场覆盖只数（行业聚合纳入的个股家数合计），用于页头标注「全市场口径」
+    hk_cov = sum(int(x.get("n_members") or 0) for x in hk)
+    us_cov = sum(int(x.get("n_members") or 0) for x in us)
+
     if is_hk:
         page_title = f"stock-voyager · 港股资金流日报 · {d}"
-        h1 = 'stock-voyager · <em>港股资金流日报</em>'
+        h1 = '港股资金流日报'
         sub = "收盘快照 · 资金主线 · 南向跟踪 · 行业热力"
-        src_line = f'南向成交日 <b>{sb.get("trade_date") or "—"}</b> ｜ 行业数据 {len(hk)} 个二级行业'
+        src_line = f'南向成交日 <b>{sb.get("trade_date") or "—"}</b> ｜ {len(hk)} 个二级行业 · 全市场覆盖 {hk_cov:,} 只'
         nav_key = "fundflow_hk"
     elif is_us:
         page_title = f"stock-voyager · 美股资金流日报 · {d}"
-        h1 = 'stock-voyager · <em>美股资金流日报</em>'
+        h1 = '美股资金流日报'
         sub = "收盘快照 · 资金主线 · GICS 行业 · 全球资金面"
-        src_line = f'GICS 二级行业数据 {len(us)} 个'
+        src_line = f'{len(us)} 个 GICS 一级行业 · 全市场覆盖 {us_cov:,} 只'
         nav_key = "fundflow_us"
     else:
         page_title = f"stock-voyager · A股资金流日报 · {d}"
-        h1 = 'stock-voyager · <em>A股资金流日报</em>'
+        h1 = 'A股资金流日报'
         sub = "收盘快照 · 资金主线 · 风格雷达 · 北向跟踪"
         src_line = f'北向成交日 <b>{nb.get("trade_date") or "—"}</b> ｜ 行业数据 {len(sw)} / 31'
         nav_key = "fundflow"
@@ -307,7 +311,7 @@ def write_html(path, result, market="ashare"):
         if net_vals:
             total_net = sum(net_vals) / 1e8
             cls = "up" if total_net >= 0 else "down"
-            kpis.append(kpi("美股行业主力净流入", "", f"{total_net:+.1f}亿", cls, "GICS 二级行业汇总", cls, "涨红/跌绿口径", "up" if total_net >= 0 else "dn"))
+            kpis.append(kpi("美股行业主力净流入", "", f"{total_net:+.1f}亿", cls, "GICS 一级行业汇总", cls, "涨红/跌绿口径", "up" if total_net >= 0 else "dn"))
         if br.get("available"):
             adv = br.get("advance"); dec = br.get("decline"); flat = br.get("flat")
             bcls = "up" if (adv or 0) >= (dec or 0) else "down"
@@ -361,12 +365,12 @@ def write_html(path, result, market="ashare"):
     sec_list = hk if is_hk else (us if is_us else sw)
     if is_hk:
         sec_label = "港股二级行业主力净流入"
-        sec_tag = f"{len(sec_list)} 类 · 涨红跌绿"
+        sec_tag = f"{len(sec_list)} 类 · 全市场 · 涨红跌绿"
         sec_empty = "港股行业数据暂缺，无法绘制资金流条形。"
     elif is_us:
-        sec_label = "美股 GICS 二级行业主力净流入"
-        sec_tag = f"{len(sec_list)} 类 · 涨绿跌红（美股惯例）"
-        sec_empty = "美股 GICS 二级行业数据暂缺，无法绘制资金流条形。"
+        sec_label = "美股 GICS 一级行业主力净流入"
+        sec_tag = f"{len(sec_list)} 类 · 全市场 · 涨绿跌红（美股惯例）"
+        sec_empty = "美股 GICS 一级行业数据暂缺，无法绘制资金流条形。"
     else:
         sec_label = "申万一级行业主力净流入"
         sec_tag = "31 行业 · 涨红跌绿"
@@ -535,7 +539,7 @@ def write_html(path, result, market="ashare"):
         body = '    <div class="hot">\n' + hcol("今日热点（涨幅前）", hot, "up-b", "zt") + hcol("今日异动（跌幅前）", weak, "down-b", "dt") + "    </div>\n"
     else:
         body = _empty_body("热点/异动板块数据暂缺。")
-    S.append(_panel("热点与异动板块", ("美股 GICS 二级行业涨跌 TOP" if is_us else ("港股板块涨跌 TOP" if is_hk else "申万行业涨跌 TOP")), body))
+    S.append(_panel("热点与异动板块", ("美股 GICS 一级行业涨跌 TOP" if is_us else ("港股二级行业涨跌 TOP" if is_hk else "申万行业涨跌 TOP")), body))
 
     foot_source = (
         "南向（港股通）成交额为公开披露项，<b>净买入亦公开披露</b>（与北向不同）。"
